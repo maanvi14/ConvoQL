@@ -1,0 +1,618 @@
+{
+  "timestamp": "2026-05-29T21:12:11.880916",
+  "total": 61,
+  "passed": 22,
+  "failed": 39,
+  "results": [
+    {
+      "category": "TAG_SEARCH_NO_TYPE_FILTER",
+      "query": "Show all transactions tagged with 'subscription'",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE tags LIKE '%subscription%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' (neither debit nor credit) - PASSED",
+      "row_count": 14,
+      "duration": 2.291302442550659,
+      "error": null
+    },
+    {
+      "category": "TAG_SEARCH_NO_TYPE_FILTER",
+      "query": "Show all transactions tagged with 'anomaly'",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE tags LIKE '%anomaly%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' (neither debit nor credit) - PASSED",
+      "row_count": 5,
+      "duration": 39.868298053741455,
+      "error": null
+    },
+    {
+      "category": "TAG_SEARCH_NO_TYPE_FILTER",
+      "query": "Show all transactions tagged with 'monthly'",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE tags LIKE '%monthly%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' (neither debit nor credit) - PASSED",
+      "row_count": 20,
+      "duration": 56.00561451911926,
+      "error": null
+    },
+    {
+      "category": "TAG_SEARCH_NO_TYPE_FILTER",
+      "query": "Show all transactions tagged with 'weekend'",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE tags LIKE '%weekend%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' (neither debit nor credit) - PASSED",
+      "row_count": 6,
+      "duration": 47.52385210990906,
+      "error": null
+    },
+    {
+      "category": "TAG_SEARCH_NO_TYPE_FILTER",
+      "query": "Show all transactions tagged with 'food'",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE tags LIKE '%food%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' (neither debit nor credit) - PASSED",
+      "row_count": 8,
+      "duration": 50.084484577178955,
+      "error": null
+    },
+    {
+      "category": "TAG_SEARCH_NO_TYPE_FILTER",
+      "query": "Show all transactions tagged with 'travel'",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE tags LIKE '%travel%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' (neither debit nor credit) - PASSED",
+      "row_count": 4,
+      "duration": 46.334556102752686,
+      "error": null
+    },
+    {
+      "category": "CATEGORY_NO_TYPE_FILTER",
+      "query": "What are all my Health transactions?",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, tags FROM transactions WHERE tags LIKE '%health%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' unless explicitly asking for expenses/income - PASSED",
+      "row_count": 1,
+      "duration": 41.77388048171997,
+      "error": null
+    },
+    {
+      "category": "CATEGORY_NO_TYPE_FILTER",
+      "query": "Show me my Shopping transactions",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE category = 'Shopping' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' unless explicitly asking for expenses/income - PASSED",
+      "row_count": 10,
+      "duration": 53.007222175598145,
+      "error": null
+    },
+    {
+      "category": "CATEGORY_NO_TYPE_FILTER",
+      "query": "List all Food transactions",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE category LIKE '%Food%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' unless explicitly asking for expenses/income - PASSED",
+      "row_count": 8,
+      "duration": 49.472474575042725,
+      "error": null
+    },
+    {
+      "category": "CATEGORY_NO_TYPE_FILTER",
+      "query": "Show me Travel transactions",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE category LIKE '%Travel%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' unless explicitly asking for expenses/income - PASSED",
+      "row_count": 4,
+      "duration": 44.14398741722107,
+      "error": null
+    },
+    {
+      "category": "CATEGORY_NO_TYPE_FILTER",
+      "query": "What Entertainment transactions do I have?",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE category = 'Entertainment' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' unless explicitly asking for expenses/income - PASSED",
+      "row_count": 11,
+      "duration": 51.46013784408569,
+      "error": null
+    },
+    {
+      "category": "MERCHANT_NO_TYPE_FILTER",
+      "query": "Show all transactions from Amazon",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE merchant LIKE '%Amazon%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' - PASSED",
+      "row_count": 4,
+      "duration": 46.538137674331665,
+      "error": null
+    },
+    {
+      "category": "MERCHANT_NO_TYPE_FILTER",
+      "query": "Show all transactions from Apollo Pharmacy",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE merchant = 'Apollo Pharmacy' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' - PASSED",
+      "row_count": 5,
+      "duration": 46.22632718086243,
+      "error": null
+    },
+    {
+      "category": "MERCHANT_NO_TYPE_FILTER",
+      "query": "Show all transactions from Netflix",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE merchant LIKE '%Netflix%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' - PASSED",
+      "row_count": 5,
+      "duration": 46.05155801773071,
+      "error": null
+    },
+    {
+      "category": "MERCHANT_NO_TYPE_FILTER",
+      "query": "Show all transactions from Uber",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE merchant LIKE '%Uber%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL must NOT contain 'type = ' - PASSED",
+      "row_count": 4,
+      "duration": 45.67778015136719,
+      "error": null
+    },
+    {
+      "category": "EXPENSE_QUERIES_DEBIT",
+      "query": "How much did I spend on Groceries this month?",
+      "sql": "SELECT (ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now') LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 17,
+      "duration": 79.42966628074646,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "EXPENSE_QUERIES_DEBIT",
+      "query": "What was my highest expense ever?",
+      "sql": "SELECT transaction_id, description, ABS(amount) AS expense_amount, date, category, account FROM transactions WHERE type = 'debit' ORDER BY ABS(amount) DESC LIMIT 1",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 1,
+      "duration": 71.37329936027527,
+      "error": "Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "EXPENSE_QUERIES_DEBIT",
+      "query": "Show my spending by category this month",
+      "sql": "SELECT category,(ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now') GROUP BY category ORDER BY total_spent DESC LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 11,
+      "duration": 79.90229868888855,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "EXPENSE_QUERIES_DEBIT",
+      "query": "How much did I spend on Shopping in March 2025?",
+      "sql": "SELECT (ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' AND strftime('%Y-%m', date) = '2025-03-01' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 0,
+      "duration": 77.74650001525879,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "EXPENSE_QUERIES_DEBIT",
+      "query": "What was my biggest purchase?",
+      "sql": "SELECT transaction_id, description, ABS(amount) AS expense_amount, date, category, account FROM transactions WHERE type = 'debit' ORDER BY ABS(amount) DESC LIMIT 1",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 1,
+      "duration": 78.31736946105957,
+      "error": "Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "EXPENSE_QUERIES_DEBIT",
+      "query": "Show me all expenses above 5000",
+      "sql": "SELECT transaction_id, date, description, ABS(amount) AS expense_amount FROM transactions WHERE type = 'debit' AND ABS(amount) > 5000 ORDER BY ABS(amount) DESC LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 17,
+      "duration": 84.21955370903015,
+      "error": "Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "EXPENSE_QUERIES_DEBIT",
+      "query": "How much did I spend on Food in June 2025?",
+      "sql": "SELECT (ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' AND strftime('%Y-%m', date) = '2025-06' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 0,
+      "duration": 77.73058843612671,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "INCOME_QUERIES_CREDIT",
+      "query": "What is my total income?",
+      "sql": "SELECT (amount) AS total_income FROM transactions WHERE type = 'credit' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_income' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 16,
+      "duration": 76.75535726547241,
+      "error": "Schema error: Column 'total_income' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "INCOME_QUERIES_CREDIT",
+      "query": "Show me all salary credits",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE type = 'credit' AND description LIKE '%salary%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL MUST contain 'type = 'credit'' - PASSED",
+      "row_count": 5,
+      "duration": 46.58959341049194,
+      "error": null
+    },
+    {
+      "category": "INCOME_QUERIES_CREDIT",
+      "query": "How much freelance income did I get?",
+      "sql": "SELECT (amount) AS freelance_income FROM transactions WHERE type = 'credit' AND category = 'Income' AND tags LIKE '%freelance%' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'freelance_income' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 0,
+      "duration": 70.52559494972229,
+      "error": "Schema error: Column 'freelance_income' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "INCOME_QUERIES_CREDIT",
+      "query": "What was my total income in May 2025?",
+      "sql": "SELECT (amount) AS total_income FROM transactions WHERE type = 'credit' AND date LIKE '%2025-05%' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_income' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 0,
+      "duration": 76.26987385749817,
+      "error": "Schema error: Column 'total_income' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "INCOME_QUERIES_CREDIT",
+      "query": "Show me all investment returns",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE category = 'Investment Returns' ORDER BY date DESC LIMIT 50",
+      "passed": false,
+      "message": "\u274c SQL MUST contain 'type = 'credit'' - FAILED | SQL: SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE category = 'Investme...",
+      "row_count": 0,
+      "duration": 41.734901905059814,
+      "error": null
+    },
+    {
+      "category": "TIME_BASED",
+      "query": "Show my spending trend over the last 6 months",
+      "sql": "SELECT strftime('%Y-%m', date) AS month, SUM(ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' AND date >= date('now', '-6 months') GROUP BY strftime('%Y-%m', date) ORDER BY month DESC LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'month' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 5,
+      "duration": 78.54422235488892,
+      "error": "Schema error: Column 'month' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "TIME_BASED",
+      "query": "What did I spend in January 2025?",
+      "sql": "SELECT (ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' AND strftime('%Y-%m', date) = '2025-01-01' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 0,
+      "duration": 73.01074075698853,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "TIME_BASED",
+      "query": "Compare my spending in March vs April",
+      "sql": "SELECT (CASE WHEN strftime('%Y-%m', date) = strftime('%Y-%m', 'now') THEN ABS(amount) ELSE 0 END) AS this_month_spent, SUM(CASE WHEN strftime('%Y-%m', date) = strftime('%Y-%m', 'now', '-1 month') THEN ABS(amount) ELSE 0 END) AS last_month_spent FROM transactions WHERE type = 'debit' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'this_month_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 1,
+      "duration": 80.76931476593018,
+      "error": "Schema error: Column 'this_month_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "TIME_BASED",
+      "query": "Show me transactions from last month",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now', '-1 month') ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL MUST use date filtering - PASSED",
+      "row_count": 19,
+      "duration": 57.82360053062439,
+      "error": null
+    },
+    {
+      "category": "TIME_BASED",
+      "query": "What were my expenses this month?",
+      "sql": "SELECT (ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now') LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 17,
+      "duration": 78.76142358779907,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "TIME_BASED",
+      "query": "Show me all transactions from June 2025",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE date LIKE '%2025-06%' ORDER BY date DESC LIMIT 50",
+      "passed": false,
+      "message": "\u274c SQL MUST use date filtering - FAILED | SQL: SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE date LIKE '%2025-06%...",
+      "row_count": 0,
+      "duration": 43.2053542137146,
+      "error": null
+    },
+    {
+      "category": "AGGREGATION",
+      "query": "What is my average daily spend?",
+      "sql": "SELECT AVG(ABS(amount)) AS avg_daily_spend FROM transactions WHERE type = 'debit' AND strftime('%Y-%m', date) = strftime('%Y-%m', 'now') LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'avg_daily_spend' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 1,
+      "duration": 76.07675552368164,
+      "error": "Schema error: Column 'avg_daily_spend' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "AGGREGATION",
+      "query": "How many transactions did I make this month?",
+      "sql": "SELECT COUNT(*) AS num_transactions FROM transactions WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now') LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'num_transactions' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 1,
+      "duration": 75.66984057426453,
+      "error": "Schema error: Column 'num_transactions' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "AGGREGATION",
+      "query": "What category has the highest spending?",
+      "sql": "SELECT category FROM transactions WHERE type = 'debit' ORDER BY ABS(amount) DESC LIMIT 1",
+      "passed": false,
+      "message": "\u274c SQL MUST use aggregate function (SUM, COUNT, AVG) - FAILED | SQL: SELECT category FROM transactions WHERE type = 'debit' ORDER BY ABS(amount) DESC LIMIT 1...",
+      "row_count": 1,
+      "duration": 41.990320920944214,
+      "error": null
+    },
+    {
+      "category": "AGGREGATION",
+      "query": "Show me total spending by payment method",
+      "sql": "SELECT payment_method,(ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' GROUP BY payment_method ORDER BY total_spent DESC LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 4,
+      "duration": 76.35760927200317,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "AGGREGATION",
+      "query": "What is the total amount spent on Travel?",
+      "sql": "SELECT (ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' AND category = 'Travel' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 4,
+      "duration": 76.66814041137695,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "RANKING",
+      "query": "What are my top 5 expenses?",
+      "sql": "SELECT transaction_id, description, ABS(amount) AS expense_amount, date, category, account FROM transactions WHERE type = 'debit' ORDER BY ABS(amount) DESC LIMIT 5",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 5,
+      "duration": 74.15453052520752,
+      "error": "Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "RANKING",
+      "query": "Which month had the highest spending?",
+      "sql": "SELECT strftime('%Y-%m', date) AS month FROM transactions WHERE type = 'debit' GROUP BY strftime('%Y-%m', date) ORDER BY SUM(ABS(amount)) DESC LIMIT 1",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'month' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 1,
+      "duration": 74.75082159042358,
+      "error": "Schema error: Column 'month' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "RANKING",
+      "query": "Show me the top 3 categories by spending",
+      "sql": "SELECT category,(ABS(amount)) AS total_spent FROM transactions WHERE type = 'debit' GROUP BY category ORDER BY total_spent DESC LIMIT 3",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 3,
+      "duration": 76.74087715148926,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "RANKING",
+      "query": "What was my most expensive transaction?",
+      "sql": "SELECT transaction_id, description, ABS(amount) AS expense_amount, date, category, account FROM transactions WHERE 1=1 ORDER BY ABS(amount) DESC LIMIT 1",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 1,
+      "duration": 76.24718475341797,
+      "error": "Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "ANOMALY",
+      "query": "Show me unusual transactions",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE tags LIKE '%anomaly%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL should identify unusual transactions (ABS, ORDER BY, or LIMIT) - PASSED",
+      "row_count": 5,
+      "duration": 46.80055546760559,
+      "error": null
+    },
+    {
+      "category": "ANOMALY",
+      "query": "What are my biggest outliers?",
+      "sql": "SELECT transaction_id, description, ABS(amount) AS expense_amount, date, category, account FROM transactions WHERE tags LIKE '%anomaly%' ORDER BY ABS(amount) DESC LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 5,
+      "duration": 83.2379355430603,
+      "error": "Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "ANOMALY",
+      "query": "Show me transactions that are way above average",
+      "sql": "",
+      "passed": false,
+      "message": "Test runner error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 5390, Requested 701. Please try again in 910ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "row_count": 0,
+      "duration": 8.127927541732788,
+      "error": "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 5390, Requested 701. Please try again in 910ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "category": "ANOMALY",
+      "query": "Any suspicious spending patterns?",
+      "sql": "SELECT transaction_id, date, description, ABS(amount) AS expense_amount, category, account FROM transactions WHERE type = 'debit' AND tags LIKE '%anomaly%' ORDER BY ABS(amount) DESC LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 5,
+      "duration": 77.13454031944275,
+      "error": "Schema error: Column 'expense_amount' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "BUDGET_MULTI_TABLE",
+      "query": "Which categories are over budget this month?",
+      "sql": "",
+      "passed": false,
+      "message": "Test runner error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 3988, Requested 2051. Please try again in 389.999999ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "row_count": 0,
+      "duration": 57.68961524963379,
+      "error": "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 3988, Requested 2051. Please try again in 389.999999ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "category": "BUDGET_MULTI_TABLE",
+      "query": "Compare my budget vs actual spending for June",
+      "sql": "",
+      "passed": false,
+      "message": "Test runner error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 4309, Requested 1737. Please try again in 459.999999ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "row_count": 0,
+      "duration": 5.805909156799316,
+      "error": "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 4309, Requested 1737. Please try again in 459.999999ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "category": "BUDGET_MULTI_TABLE",
+      "query": "Am I over budget on any category?",
+      "sql": "SELECT category,(ABS(amount)) AS total_spent FROM transactions WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now') GROUP BY category HAVING SUM(ABS(amount)) > (SELECT (ABS(amount)) FROM budgets WHERE category = transactions.category AND month_year = strftime('%Y-%m', 'now')) ORDER BY total_spent DESC LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions', 'budgets']. Available columns: ['account', 'allocated', 'amount', 'budget_id', 'category', 'date', 'description', 'merchant', 'month_year', 'payment_method', 'spent', 'tags', 'transaction_id', 'type']",
+      "row_count": 0,
+      "duration": 70.07116389274597,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions', 'budgets']. Available columns: ['account', 'allocated', 'amount', 'budget_id', 'category', 'date', 'description', 'merchant', 'month_year', 'payment_method', 'spent', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "BUDGET_MULTI_TABLE",
+      "query": "Show budget utilization by category",
+      "sql": "SELECT category, SUM(ABS(amount)) AS total_spent, COUNT(*) AS num_transactions FROM transactions WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now') GROUP BY category ORDER BY total_spent DESC LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 14,
+      "duration": 85.21781349182129,
+      "error": "Schema error: Column 'total_spent' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "ACCOUNT_METADATA",
+      "query": "What is my total balance across all accounts?",
+      "sql": "SELECT (balance) AS total_balance FROM accounts LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_balance' does not exist in table(s) ['accounts']. Available columns: ['account_name', 'account_type', 'balance', 'bank_name', 'currency', 'is_primary']",
+      "row_count": 3,
+      "duration": 78.69986128807068,
+      "error": "Schema error: Column 'total_balance' does not exist in table(s) ['accounts']. Available columns: ['account_name', 'account_type', 'balance', 'bank_name', 'currency', 'is_primary']"
+    },
+    {
+      "category": "ACCOUNT_METADATA",
+      "query": "Show me my HDFC account transactions",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE account = 'HDFC' ORDER BY date DESC LIMIT 50",
+      "passed": false,
+      "message": "\u274c SQL MUST contain 'accounts' table - FAILED | SQL: SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE account = 'HDFC' ORD...",
+      "row_count": 44,
+      "duration": 56.565653800964355,
+      "error": null
+    },
+    {
+      "category": "ACCOUNT_METADATA",
+      "query": "Which account has the highest balance?",
+      "sql": "SELECT account_name, balance FROM accounts ORDER BY balance DESC LIMIT 1",
+      "passed": true,
+      "message": "\u2705 SQL MUST contain 'accounts' table - PASSED",
+      "row_count": 1,
+      "duration": 41.85893177986145,
+      "error": null
+    },
+    {
+      "category": "COMPOUND",
+      "query": "Show me my income and expenses for May 2025",
+      "sql": "SELECT (CASE WHEN type = 'credit' THEN amount ELSE 0 END) AS total_income, SUM(CASE WHEN type = 'debit' THEN ABS(amount) ELSE 0 END) AS total_expenses FROM transactions WHERE date LIKE '%2025-05%' LIMIT 50",
+      "passed": false,
+      "message": "Execution error: Schema error: Column 'total_income' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']",
+      "row_count": 1,
+      "duration": 78.16478610038757,
+      "error": "Schema error: Column 'total_income' does not exist in table(s) ['transactions']. Available columns: ['account', 'amount', 'category', 'date', 'description', 'merchant', 'payment_method', 'tags', 'transaction_id', 'type']"
+    },
+    {
+      "category": "COMPOUND",
+      "query": "Compare my Shopping vs Groceries spending",
+      "sql": "",
+      "passed": false,
+      "message": "Test runner error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 4030, Requested 2168. Please try again in 1.98s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "row_count": 0,
+      "duration": 59.30673551559448,
+      "error": "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 4030, Requested 2168. Please try again in 1.98s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "category": "COMPOUND",
+      "query": "What did I spend on Food and Entertainment this month?",
+      "sql": "",
+      "passed": false,
+      "message": "Test runner error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 3965, Requested 2110. Please try again in 750ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "row_count": 0,
+      "duration": 23.189261436462402,
+      "error": "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 3965, Requested 2110. Please try again in 750ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "category": "EDGE_CASES",
+      "query": "Show me transactions with no tags",
+      "sql": "",
+      "passed": false,
+      "message": "Test runner error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 5067, Requested 987. Please try again in 539.999999ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "row_count": 0,
+      "duration": 24.91654372215271,
+      "error": "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 5067, Requested 987. Please try again in 539.999999ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "category": "EDGE_CASES",
+      "query": "What transactions used Cash payment?",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE payment_method = 'Cash' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL should handle edge cases correctly - PASSED",
+      "row_count": 5,
+      "duration": 42.899033069610596,
+      "error": null
+    },
+    {
+      "category": "EDGE_CASES",
+      "query": "Show me all UPI transactions",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE payment_method LIKE '%UPI%' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL should handle edge cases correctly - PASSED",
+      "row_count": 38,
+      "duration": 54.82926058769226,
+      "error": null
+    },
+    {
+      "category": "EDGE_CASES",
+      "query": "List transactions from ICICI account",
+      "sql": "SELECT transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags FROM transactions WHERE account = 'ICICI' ORDER BY date DESC LIMIT 50",
+      "passed": true,
+      "message": "\u2705 SQL should handle edge cases correctly - PASSED",
+      "row_count": 35,
+      "duration": 57.64900517463684,
+      "error": null
+    },
+    {
+      "category": "EDGE_CASES",
+      "query": "Show me refunds and returns",
+      "sql": "",
+      "passed": false,
+      "message": "Test runner error: Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 5108, Requested 969. Please try again in 770ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}",
+      "row_count": 0,
+      "duration": 3.248806953430176,
+      "error": "Error code: 429 - {'error': {'message': 'Rate limit reached for model `llama-3.1-8b-instant` in organization `org_01jzsd5hxaejtvdgbxsjrnswac` service tier `on_demand` on tokens per minute (TPM): Limit 6000, Used 5108, Requested 969. Please try again in 770ms. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    }
+  ]
+}
