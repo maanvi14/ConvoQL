@@ -57,11 +57,6 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
             "question": req.question,
             "messages": [{"role": "user", "content": req.question}],
             "dialect": "sqlite",
-            "error": None,           # FIXED: Initialize error field
-            "retry_hint": None,      # FIXED: Initialize retry_hint field
-            "retry_count": 0,        # FIXED: Initialize retry_count field
-            "valid": None,           # FIXED: Initialize valid field
-            "result_set_valid": True, # FIXED: Initialize result_set_valid field
         }
 
         # Run the LangGraph
@@ -130,6 +125,4 @@ async def get_schema() -> Dict[str, Any]:
         return schema
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-
     

@@ -15,7 +15,6 @@ from agent.nodes.result_set_validator import result_set_validator_node
 from agent.nodes.enhanced_synthesizer import enhanced_synthesizer_node
 from agent.nodes.trend_analyzer import trend_analyzer_node
 from agent.nodes.narrative_generator import narrative_generator_node
-from agent.nodes.generator import generator_node  # FIXED: Import generator_node
 from db.connection import db_manager
 from cache.schema_rag import schema_rag
 
@@ -33,7 +32,6 @@ workflow.add_node("dynamic_few_shot", dynamic_few_shot_node)
 # Layer 3: Generation
 workflow.add_node("column_linker", column_linker_node)
 workflow.add_node("sql_skeleton", sql_skeleton_node)
-workflow.add_node("generator", generator_node)  # FIXED: Add generator node
 
 # Layer 4: Validation
 workflow.add_node("validator", validator_node)
@@ -56,10 +54,9 @@ workflow.add_edge("query_decomposer", "structured_planner")
 workflow.add_edge("structured_planner", "dynamic_few_shot")
 workflow.add_edge("dynamic_few_shot", "column_linker")
 workflow.add_edge("column_linker", "sql_skeleton")
-workflow.add_edge("sql_skeleton", "generator")  # FIXED: Wire sql_skeleton -> generator
 
 # Layer 3 -> Layer 4 (Validator)
-workflow.add_edge("generator", "validator")  # FIXED: Wire generator -> validator
+workflow.add_edge("sql_skeleton", "validator")
 
 # === CONDITIONAL: Validator -> Retry or Continue ===
 def route_after_validator(state: AgentState) -> str:
@@ -72,7 +69,6 @@ def route_after_validator(state: AgentState) -> str:
     if is_valid is True:
         return "result_set_validator"
 
-    # Not valid -- route to error classifier (which increments retry_count)
     return "typed_error_classifier"
 
 workflow.add_conditional_edges(
@@ -90,19 +86,18 @@ def route_after_error_classification(state: AgentState) -> str:
     retry_count = state.get("retry_count", 0)
     print(f"[Retry] Attempt {retry_count}/3")
 
-    # If max retries reached, skip to result validation (will fail gracefully)
     if retry_count >= 3:
         print("[Retry] Max retries reached. Proceeding to synthesis with error.")
         return "result_set_validator"
 
-    # Retry: go back to generator (NOT column_linker) so full regeneration happens
-    return "generator"  # FIXED: Retry at generator, not column_linker
+    # Retry: go back to sql_skeleton so full regeneration happens with retry_hint
+    return "sql_skeleton"
 
 workflow.add_conditional_edges(
     "typed_error_classifier",
     route_after_error_classification,
     {
-        "generator": "generator",  # FIXED: Route to generator for retry
+        "sql_skeleton": "sql_skeleton",
         "result_set_validator": "result_set_validator",
     }
 )
@@ -118,13 +113,9 @@ def route_after_result_check(state: AgentState) -> str:
     if is_valid is True:
         return "enhanced_synthesizer"
 
-    # Result set invalid -- check if we should retry
     if retry_count < 3:
-        # Route to typed_error_classifier to increment count and classify
-        # The error was already set by result_set_validator
         return "typed_error_classifier"
 
-    # Max retries reached, proceed with potentially bad data
     print("[ResultCheck] Max retries reached. Proceeding with current data.")
     return "enhanced_synthesizer"
 
@@ -165,16 +156,11 @@ agent_graph.invoke = invoke_with_limit
 agent_graph.ainvoke = ainvoke_with_limit
 
 
-# === EXPLICIT INITIALIZATION ===
-# Call initialize_graph() from your entry point BEFORE using agent_graph.
-# Do NOT auto-run at import time to avoid event loop conflicts.
-
 async def initialize_graph():
     """Initialize database and SchemaRAG. Must be called before first agent_graph use."""
     await db_manager.initialize()
     print(f"[Graph] Database initialized: {db_manager.dialect}")
 
-    # Index schema for RAG
     schema = await db_manager.get_schema()
     schema_rag.embed_schema(schema)
     stats = schema_rag.get_stats()

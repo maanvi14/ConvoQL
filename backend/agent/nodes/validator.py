@@ -28,28 +28,37 @@ async def _get_schema_columns() -> Dict[str, List[str]]:
 
 def _extract_table_column_refs(sql: str) -> List[tuple]:
     """Extract table.column references from SQL."""
-    # Match patterns like table.column, table_alias.column
     refs = re.findall(r'\b(\w+)\.(\w+)\b', sql)
     return refs
 
 
 def _extract_bare_column_refs(sql: str) -> List[str]:
-    """========================================================================
-    FIX: Extract bare column references (not table.column) from SELECT, WHERE, 
-    GROUP BY, ORDER BY, HAVING clauses.
-    ======================================================================"""
+    """Extract bare column references, EXCLUDING aliases defined in SELECT."""
     # Remove string literals first
     sql_clean = re.sub(r"'[^']*'", "''", sql)
     sql_clean = re.sub(r'"[^"]*"', '""', sql_clean)
 
-    # Extract column names from SELECT clause
+    # === CRITICAL FIX: Extract aliases defined in SELECT so we skip them ===
+    aliases = set()
     select_match = re.search(r'SELECT\s+(.*?)\s+FROM\b', sql_clean, re.IGNORECASE | re.DOTALL)
+    if select_match:
+        select_part = select_match.group(1)
+        # Find AS aliases: "foo AS bar" or "foo bar"
+        # Pattern 1: ... AS alias
+        as_aliases = re.findall(r'\bAS\s+(\w+)\b', select_part, re.IGNORECASE)
+        aliases.update(a.lower() for a in as_aliases)
+        # Pattern 2: SUM(...) alias (no AS)
+        # Match function calls followed by a bare word
+        func_aliases = re.findall(r'\)\s+(\w+)\b', select_part)
+        aliases.update(a.lower() for a in func_aliases if a.lower() not in {'from', 'where', 'and', 'or'})
+
+    # Extract column names from SELECT clause (skip aliases)
     select_cols = []
     if select_match:
         select_part = select_match.group(1)
-        # Split by comma, but be careful with function calls
         # Simple approach: extract words that look like column names
-        select_cols = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', select_part)
+        raw_cols = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', select_part)
+        select_cols = [c for c in raw_cols if c.lower() not in aliases]
 
     # Extract from WHERE, GROUP BY, ORDER BY, HAVING
     where_match = re.search(r'WHERE\s+(.*?)(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|$)', sql_clean, re.IGNORECASE | re.DOTALL)
@@ -66,7 +75,12 @@ def _extract_bare_column_refs(sql: str) -> List[str]:
     order_match = re.search(r'ORDER\s+BY\s+(.*?)(?:LIMIT|$)', sql_clean, re.IGNORECASE | re.DOTALL)
     order_cols = []
     if order_match:
-        order_cols = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', order_match.group(1))
+        # In ORDER BY, aliases ARE valid references to SELECT expressions
+        # So we should NOT flag aliases used in ORDER BY
+        order_part = order_match.group(1)
+        order_cols = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', order_part)
+        # Remove aliases from validation since they're valid in ORDER BY
+        order_cols = [c for c in order_cols if c.lower() not in aliases]
 
     all_cols = select_cols + where_cols + group_cols + order_cols
 
@@ -90,11 +104,9 @@ def _extract_from_tables(sql: str) -> List[str]:
     """Extract table names from FROM and JOIN clauses."""
     tables = []
 
-    # FROM table_name (handle optional AS alias)
     from_matches = re.findall(r'FROM\s+(\w+)(?:\s+AS\s+\w+)?', sql, re.IGNORECASE)
     tables.extend(from_matches)
 
-    # JOIN table_name (handle optional AS alias)
     join_matches = re.findall(r'JOIN\s+(\w+)(?:\s+AS\s+\w+)?', sql, re.IGNORECASE)
     tables.extend(join_matches)
 
@@ -121,7 +133,7 @@ async def validator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Validate FROM tables exist
     for table in from_tables:
         if table not in schema_cols:
-            state["error"] = f"Schema error: Table '{table}' does not exist in database. Available tables: {[k for k in schema_cols.keys() if not k.endswith('_orig')]}"
+            state["error"] = f"Schema error: Table '{table}' does not exist in database."
             state["valid"] = False
             return state
 
@@ -132,19 +144,15 @@ async def validator_node(state: Dict[str, Any]) -> Dict[str, Any]:
         table_lower = table.lower()
         col_lower = col.lower()
 
-        # Skip if table not in schema (already caught above)
         if table_lower not in schema_cols:
             continue
 
-        # Check if column exists in table
         if col_lower not in schema_cols[table_lower]:
-            state["error"] = f"Schema error: Column '{table}.{col}' does not exist. Available columns in {table}: {schema_cols.get(f'{table_lower}_orig', schema_cols[table_lower])}"
+            state["error"] = f"Schema error: Column '{table}.{col}' does not exist."
             state["valid"] = False
             return state
 
-    # ============================================================================
-    # FIX 3: Validate BARE column references (e.g., SELECT id instead of transaction_id)
-    # ============================================================================
+    # Validate BARE column references (skip aliases)
     bare_cols = _extract_bare_column_refs(sql)
 
     # Collect all valid columns from referenced tables
@@ -155,24 +163,20 @@ async def validator_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     for col in bare_cols:
         col_lower = col.lower()
-        # Skip if it's a known SQL function or alias
         if col_lower in {'count', 'sum', 'avg', 'max', 'min', 'abs', 'round', 'cast', 'coalesce', 'strftime', 'date_format', 'to_char', 'now', 'length', 'upper', 'lower', 'trim', 'replace', 'substr', 'instr'}:
             continue
 
         if col_lower not in valid_columns:
-            # Check if it's a known hallucination
             if col_lower == 'id':
-                state["error"] = f"Schema error: Column 'id' does not exist. Did you mean 'transaction_id'? Available columns: {sorted(valid_columns)}"
+                state["error"] = f"Schema error: Column 'id' does not exist. Did you mean 'transaction_id'?"
             elif col_lower in ['name', 'color', 'budget_limit'] and 'categories' not in from_tables:
-                state["error"] = f"Schema error: Column '{col}' only exists in table 'categories' but you're querying from {from_tables}. Available columns in {from_tables}: {sorted(valid_columns)}"
+                state["error"] = f"Schema error: Column '{col}' only exists in table 'categories'."
             else:
-                state["error"] = f"Schema error: Column '{col}' does not exist in table(s) {from_tables}. Available columns: {sorted(valid_columns)}"
+                state["error"] = f"Schema error: Column '{col}' does not exist in table(s) {from_tables}."
             state["valid"] = False
             return state
 
-    # ============================================================================
-    # FIX 4: Catch tags.name, tags.value, tags->> etc. (JSON hallucinations)
-    # ============================================================================
+    # Catch tags.name, tags.value, tags->> etc. (JSON hallucinations)
     json_hallucination_patterns = [
         r'\btags\.name\b',
         r'\btags\.value\b', 
@@ -182,7 +186,7 @@ async def validator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ]
     for pattern in json_hallucination_patterns:
         if re.search(pattern, sql, re.IGNORECASE):
-            state["error"] = "Schema error: 'tags' is a comma-separated TEXT column, not a JSON object. Use tags LIKE '%value%' instead of tags.name or tags->>."
+            state["error"] = "Schema error: 'tags' is a comma-separated TEXT column, not JSON. Use tags LIKE '%value%'."
             state["valid"] = False
             return state
 
@@ -191,17 +195,16 @@ async def validator_node(state: Dict[str, Any]) -> Dict[str, Any]:
         async with db_manager.engine.connect() as conn:
             await conn.execute(text(f"EXPLAIN QUERY PLAN {sql}"))
     except Exception as e:
-        state["error"] = f"SQL syntax error: {str(e)}. Please check table names, column names, and JOIN conditions."
+        state["error"] = f"SQL syntax error: {str(e)}."
         state["valid"] = False
         return state
 
-    # 4. Dry-run: Try to execute with LIMIT 1 to catch runtime errors
+    # 4. Dry-run: Try to execute with LIMIT 1
     try: 
         test_sql = f"SELECT * FROM ({sql}) AS validation_query LIMIT 1"
         async with db_manager.engine.connect() as conn:
             await conn.execute(text(test_sql))
     except Exception as e:
-        # Fallback: try appending LIMIT 1
         try:
             if "LIMIT" not in sql.upper():
                 limited_sql = f"{sql.rstrip(';')} LIMIT 1"
@@ -211,10 +214,11 @@ async def validator_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 async with db_manager.engine.connect() as conn:
                     await conn.execute(text(sql))
         except Exception as e2:
-            state["error"] = f"Query execution error: {str(e2)}. Check that all referenced columns exist and types are compatible."
+            state["error"] = f"Query execution error: {str(e2)}."
             state["valid"] = False
             return state
 
     state["valid"] = True
     state["error"] = None
     return state
+

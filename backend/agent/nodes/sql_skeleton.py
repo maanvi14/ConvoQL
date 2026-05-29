@@ -1,12 +1,8 @@
 """SQL skeleton generator: Builds SQL from structured plan with dialect awareness."""
 from typing import Dict, Any, List
-import json
 import re
 
-from config import get_settings
 from db.connection import db_manager
-
-settings = get_settings()
 
 # Dialect-specific date functions for entity linking
 DATE_FUNCTIONS = {
@@ -30,6 +26,19 @@ DATE_FUNCTIONS = {
     }
 }
 
+# Column name mapping for common hallucinations
+COLUMN_ALIASES = {
+    "id": "transaction_id",
+    "trans_id": "transaction_id",
+    "txn_id": "transaction_id",
+    "created_at": "date",
+    "timestamp": "date",
+    "value": "amount",
+    "price": "amount",
+    "cost": "amount",
+    "expense": "amount",
+}
+
 # Schema cache for validation
 _schema_cache = None
 
@@ -45,88 +54,37 @@ async def _get_schema_columns() -> Dict[str, List[str]]:
     return _schema_cache
 
 
-def _validate_join_condition(join_condition: str, schema_cols: Dict[str, List[str]]) -> bool:
-    """Validate that a JOIN condition references actual columns."""
-    if not join_condition:
-        return False
+def _fix_hallucinated_columns(sql: str) -> str:
+    """Fix common column hallucinations in generated SQL."""
+    # Fix 1: id -> transaction_id
+    for bad_col, good_col in COLUMN_ALIASES.items():
+        pattern = r'(?<![\w.])' + re.escape(bad_col) + r'(?![\w])'
+        if re.search(pattern, sql, re.IGNORECASE):
+            sql = re.sub(pattern, good_col, sql, flags=re.IGNORECASE)
 
-    # Extract column references like table.column
-    col_refs = re.findall(r'\b(\w+)\.(\w+)\b', join_condition)
+    # Fix 2: tags.name, tags.value -> tags (remove JSON notation)
+    sql = re.sub(r'\btags\.name\b', 'tags', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\btags\.value\b', 'tags', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\btags\[[^\]]+\]', 'tags', sql, flags=re.IGNORECASE)
 
-    for table, col in col_refs:
-        table_lower = table.lower()
-        col_lower = col.lower()
+    # Fix 3: WHERE tags = 'x' -> WHERE tags LIKE '%x%'
+    sql = re.sub(
+        r"(?i)WHERE\s+(\w+)\s*=\s*['\"]([^'\"]+)['\"]",
+        lambda m: f"WHERE {m.group(1)} LIKE '%{m.group(2)}%'" if m.group(1).lower() == 'tags' else m.group(0),
+        sql
+    )
+    # Also fix AND tags = 'x'
+    sql = re.sub(
+        r"(?i)AND\s+(\w+)\s*=\s*['\"]([^'\"]+)['\"]",
+        lambda m: f"AND {m.group(1)} LIKE '%{m.group(2)}%'" if m.group(1).lower() == 'tags' else m.group(0),
+        sql
+    )
 
-        if table_lower not in schema_cols:
-            print(f"[SQLBuilder] Invalid JOIN: table '{table}' not in schema")
-            return False
-        if col_lower not in schema_cols[table_lower]:
-            print(f"[SQLBuilder] Invalid JOIN: column '{table}.{col}' not in schema")
-            return False
+    # Fix 4: Remove double commas and fix spacing
+    sql = re.sub(r',\s*,', ',', sql)
+    sql = re.sub(r'SELECT\s+,', 'SELECT ', sql, flags=re.IGNORECASE)
+    sql = re.sub(r',\s+FROM', ' FROM', sql, flags=re.IGNORECASE)
 
-    return True
-
-
-def _clean_invalid_columns(sql: str, schema_cols: Dict[str, List[str]]) -> str:
-    """Remove SELECT columns that don't exist in schema."""
-    # Parse SELECT clause
-    select_match = re.search(r'SELECT\s+(.*?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
-    if not select_match:
-        return sql
-
-    select_part = select_match.group(1)
-
-    # Split by comma, handling aliases
-    cols = []
-    current = ""
-    paren_depth = 0
-    for char in select_part:
-        if char == '(':
-            paren_depth += 1
-        elif char == ')':
-            paren_depth -= 1
-        elif char == ',' and paren_depth == 0:
-            cols.append(current.strip())
-            current = ""
-            continue
-        current += char
-    if current.strip():
-        cols.append(current.strip())
-
-    valid_cols = []
-    for col in cols:
-        col_clean = col.strip()
-        # Skip * and aggregates
-        if col_clean == '*' or '(' in col_clean:
-            valid_cols.append(col_clean)
-            continue
-
-        # Check for table.column format
-        if '.' in col_clean:
-            parts = col_clean.split('.')
-            if len(parts) == 2:
-                table, col_name = parts[0], parts[1]
-                table_lower = table.lower().strip()
-                col_lower = col_name.lower().strip()
-
-                # Remove alias if present
-                if ' AS ' in col_lower:
-                    col_lower = col_lower.split(' AS ')[0].strip()
-
-                if table_lower in schema_cols and col_lower in schema_cols[table_lower]:
-                    valid_cols.append(col_clean)
-                else:
-                    print(f"[SQLBuilder] Removing invalid column: {col_clean}")
-            else:
-                valid_cols.append(col_clean)
-        else:
-            valid_cols.append(col_clean)
-
-    if not valid_cols:
-        valid_cols = ["*"]
-
-    new_select = ", ".join(valid_cols)
-    sql = sql.replace(select_part, new_select, 1)
     return sql
 
 
@@ -147,7 +105,6 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
     # FORCE SINGLE TABLE: If only transactions table, ignore all joins
     if len(tables) == 1 and tables[0].lower() == "transactions":
         joins = []
-        print("[SQLBuilder] Single transactions table — ignoring all JOINs")
 
     # Build SELECT
     select_clause = ", ".join(select_cols)
@@ -166,7 +123,6 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
 
                 if on_condition:
                     if "categories.category" in on_condition.lower() or "category = category" in on_condition.lower():
-                        print(f"[SQLBuilder] Skipping invalid join condition: {on_condition}")
                         continue
                     join_clauses.append(f"{join_type} {right_table} ON {on_condition}")
                 else:
@@ -184,8 +140,6 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
     elif type_filter is None:
         # Explicitly remove any type filters if intent says null
         all_filters = [f for f in all_filters if not (isinstance(f, str) and "type =" in f.lower())]
-        if len(all_filters) < len(where_filters):
-            print("[SQLBuilder] Intent type_filter is null — removing all type filters")
 
     # Add entity-based filters from linked values
     for value_link in entity_links.get("linked_values", []):
@@ -193,6 +147,7 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
             vtype = value_link.get("type", "")
             vvalue = value_link.get("value", "")
             vcolumn = value_link.get("column", "")
+            voperator = value_link.get("operator", "=")
 
             if vcolumn and vvalue:
                 if vtype == "account":
@@ -203,6 +158,13 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
                     all_filters.append(f"category = '{vvalue}'")
                 elif vtype == "payment_method":
                     all_filters.append(f"payment_method = '{vvalue}'")
+                elif vtype == "tag":
+                    # CRITICAL: tags is comma-separated, use LIKE
+                    all_filters.append(f"tags LIKE '%{vvalue}%'")
+                elif voperator == "LIKE":
+                    all_filters.append(f"{vcolumn} LIKE '%{vvalue}%'")
+                else:
+                    all_filters.append(f"{vcolumn} = '{vvalue}'")
 
     # Add entity-based date filters
     for date_ref in entity_links.get("linked_dates", []):
@@ -214,12 +176,11 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
         elif dtype == "last_year":
             all_filters.append(date_funcs["last_year"].format(col="date"))
 
-    # DEDUPLICATE filters before building WHERE clause
+    # DEDUPLICATE filters
     seen_filters = set()
     unique_filters = []
     for f in all_filters:
         if isinstance(f, str):
-            # Normalize: strip whitespace, lowercase for comparison
             normalized = f.strip().lower()
             if normalized not in seen_filters:
                 seen_filters.add(normalized)
@@ -270,67 +231,17 @@ async def sql_skeleton_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if "SELECT" not in sql_upper:
         sql = "SELECT * FROM transactions LIMIT 50"
 
-    # === SCHEMA-AWARE VALIDATION ===
-    schema_cols = await _get_schema_columns()
+    # Apply hallucination fixes
+    sql = _fix_hallucinated_columns(sql)
 
-    # 1. Validate and clean JOINs
-    if "JOIN" in sql.upper():
-        lines = sql.split("\n")
-        cleaned_lines = []
-        for line in lines:
-            if "JOIN" in line.upper():
-                # Extract ON condition
-                on_match = re.search(r'ON\s+(.+)', line, re.IGNORECASE)
-                if on_match:
-                    on_condition = on_match.group(1)
-                    if not _validate_join_condition(on_condition, schema_cols):
-                        print(f"[SQLBuilder] Removing invalid JOIN: {line.strip()}")
-                        continue
-            cleaned_lines.append(line)
-        sql = "\n".join(cleaned_lines)
+    # Ensure LIMIT exists
+    if "LIMIT" not in sql.upper():
+        sql = sql.rstrip(';') + "\nLIMIT 50"
 
-    # 2. Clean invalid columns from SELECT
-    sql = _clean_invalid_columns(sql, schema_cols)
-
-    # 3. Final safety checks
-    # Remove self-joins (JOINing a table to itself)
-    if "JOIN transactions ON transactions" in sql.lower():
-        print("[SQLBuilder] Removing self-join on transactions")
-        sql = re.sub(r'\s*(?:LEFT|INNER|RIGHT)?\s*JOIN\s+transactions\s+ON\s+.*?\n', '\n', sql, flags=re.IGNORECASE)
-
-    # Remove JOINs with made-up columns
-    invalid_patterns = [
-        (r'budgets\.id', 'budgets.id'),
-        (r'transactions\.budget_id', 'transactions.budget_id'),
-        (r'categories\.id', 'categories.id'),
-        (r'categories\.color', 'categories.color'),
-        (r'categories\.name', 'categories.name'),
-    ]
-
-    for pattern, desc in invalid_patterns:
-        if re.search(pattern, sql, re.IGNORECASE):
-            print(f"[SQLBuilder] Found invalid column reference: {desc}")
-            # Remove the entire JOIN clause containing this
-            lines = sql.split("\n")
-            cleaned = []
-            skip_next = False
-            for line in lines:
-                if re.search(pattern, line, re.IGNORECASE):
-                    skip_next = True
-                    continue
-                if skip_next and line.strip().startswith("ON"):
-                    skip_next = False
-                    continue
-                cleaned.append(line)
-            sql = "\n".join(cleaned)
-
-    # 4. If JOINs were removed and we now have a single table, clean up
-    if "JOIN" not in sql.upper() and "FROM transactions" in sql.upper():
-        # Remove any remaining table prefixes in SELECT
-        sql = re.sub(r'transactions\.', '', sql)
-        sql = re.sub(r'categories\.', '', sql)
-        sql = re.sub(r'budgets\.', '', sql)
-        sql = re.sub(r'accounts\.', '', sql)
+    # Clean up whitespace
+    sql = re.sub(r'\s+', ' ', sql).strip()
+    if sql.endswith(";"):
+        sql = sql[:-1].strip()
 
     return {
         **state,

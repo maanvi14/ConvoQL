@@ -2,19 +2,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import sys
-
-# ============================================================================
-# FIX: Clear Python module cache to force reload of modified agent nodes
-# This ensures generator.py and column_linker.py changes are picked up
-# ============================================================================
-# Remove cached modules so fresh code is loaded
-modules_to_clear = [
-    k for k in sys.modules.keys()
-    if k.startswith("agent.nodes.") or k in ("agent.graph", "agent.api_router")
-]
-for mod in modules_to_clear:
-    del sys.modules[mod]
 
 from agent.api_router import router as agent_router
 from agent.graph import initialize_graph
@@ -36,10 +23,6 @@ app.include_router(agent_router, prefix="/api")
 
 @app.on_event("startup")
 async def startup():
-    # ============================================================================
-    # FIX: Initialize graph (db + schema_rag) BEFORE first request
-    # This ensures generator.py's TABLE_COLUMNS is populated
-    # ============================================================================
     await initialize_graph()
     print("[Startup] Database and SchemaRAG initialized")
 
@@ -49,4 +32,3 @@ async def health():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
-    
