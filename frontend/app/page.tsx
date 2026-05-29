@@ -72,6 +72,10 @@ export default function LandingPage() {
     setTimeout(() => router.push("/chat"), 400);
   };
 
+  const handleConnectDB = () => {
+    router.push("/connect");
+  };
+
   return (
     <>
       <head>
@@ -176,7 +180,7 @@ export default function LandingPage() {
             </a>
           </div>
           <a
-            href="https://github.com/maanvi14/ChatSQL-AI-Powered-Data-Query-App"
+            href="https://github.com/maanvi14/ConvoQL"
             target="_blank"
             rel="noopener noreferrer"
             className="px-3.5 py-1.5 rounded-md text-[11px] no-underline transition-all font-mono hover:border-[#2dd4bf] hover:text-[#2dd4bf]"
@@ -206,7 +210,7 @@ export default function LandingPage() {
               className="w-1.5 h-1.5 rounded-full"
               style={{ backgroundColor: "#2dd4bf" }}
             />
-            Agentic SQL reasoning · LangGraph · Self-correcting
+            LangGraph orchestration · Multi-node agent · Self-correcting SQL
           </div>
 
           <h1
@@ -228,12 +232,11 @@ export default function LandingPage() {
           </h1>
 
           <p
-            className="text-[15px] max-w-[500px] leading-relaxed mb-8 font-light"
+            className="text-[15px] max-w-[600px] leading-relaxed mb-8 font-light"
             style={{ color: "#8fa3b0" }}
           >
-            ConvoQL is a conversational analytics platform. Ask questions, get SQL, charts,
-            trend analysis, and anomaly detection — powered by a self-correcting LangGraph
-            agent.
+            ConvoQL is a multi-node AI agent that converts natural language into validated SQL
+            using structured reasoning, retry-aware validation, and LangGraph orchestration.
           </p>
 
           <div className="flex gap-2.5 flex-wrap justify-center mb-3">
@@ -262,6 +265,7 @@ export default function LandingPage() {
               Try with demo data
             </button>
             <button
+              onClick={handleConnectDB}
               className="flex items-center gap-1.5 px-6 py-3 bg-transparent rounded-lg text-[13px] transition-all hover:border-[#8fa3b0]"
               style={{
                 color: "#e8edf2",
@@ -289,7 +293,7 @@ export default function LandingPage() {
             className="text-[10px] tracking-wider"
             style={{ color: "#5a7080", fontFamily: "'DM Mono', monospace" }}
           >
-            SQLite · MySQL · PostgreSQL — read-only mode, always safe
+            SQLite · MySQL · PostgreSQL — read-only enforcement at every layer
           </p>
 
           {/* Demo Window */}
@@ -674,17 +678,17 @@ export default function LandingPage() {
         {/* Stats */}
         <div className="relative z-10 px-6 pb-16">
           <div
-            className="flex justify-center max-w-[660px] mx-auto border rounded-xl overflow-hidden"
+            className="flex justify-center max-w-[700px] mx-auto border rounded-xl overflow-hidden"
             style={{
               borderColor: "#243040",
               backgroundColor: "#0e1318",
             }}
           >
             {[
-              { num: "4", label: "Agent nodes" },
-              { num: "~58%", label: "Token reduction via RAG" },
-              { num: "3×", label: "SQL self-correction retries" },
-              { num: "<200ms", label: "First token latency" },
+              { num: "13", label: "Agent node modules" },
+              { num: "3-layer", label: "SQL safety validation" },
+              { num: "8 error types", label: "Typed retry classification" },
+              { num: "3-dialect", label: "SQLite · MySQL · PostgreSQL" },
             ].map((stat, i) => (
               <div
                 key={i}
@@ -694,18 +698,18 @@ export default function LandingPage() {
                 }}
               >
                 <span
-                  className="block leading-none mb-1"
+                  className="block leading-none mb-2"
                   style={{
                     fontFamily: "'Instrument Serif', Georgia, serif",
-                    fontSize: "30px",
+                    fontSize: "28px",
                     color: "#2dd4bf",
                   }}
                 >
                   {stat.num}
                 </span>
                 <span
-                  className="text-[11px] tracking-wide"
-                  style={{ color: "#5a7080" }}
+                  className="block text-[11px] tracking-wide leading-relaxed"
+                  style={{ color: "#8fa3b0" }}
                 >
                   {stat.label}
                 </span>
@@ -732,11 +736,12 @@ export default function LandingPage() {
             Not a wrapper. A real agent.
           </h2>
           <p
-            className="text-center text-[14px] max-w-[480px] mx-auto mb-12 leading-relaxed"
+            className="text-center text-[14px] max-w-[520px] mx-auto mb-12 leading-relaxed"
             style={{ color: "#8fa3b0" }}
           >
-            Every query runs through a 4-node LangGraph graph — observable, testable, and
-            fully under your control.
+            Every query runs through a 13-node LangGraph pipeline — intent classification,
+            structured planning, schema-grounded generation, multi-layer validation, and
+            insight synthesis.
           </p>
 
           <div
@@ -747,7 +752,7 @@ export default function LandingPage() {
               {
                 num: "01",
                 title: "Schema-aware retrieval",
-                desc: "Table names, columns, and sample values are embedded into pgvector. Only relevant schema chunks are injected into the prompt.",
+                desc: "The schema is indexed at startup via a custom SchemaRAG module. Only relevant tables and columns are injected into the prompt — the generator never sees your full schema.",
                 icon: (
                   <svg
                     width="18"
@@ -765,8 +770,8 @@ export default function LandingPage() {
               },
               {
                 num: "02",
-                title: "SQL generation",
-                desc: "The planner decomposes multi-part questions. The generator produces SQL grounded in your actual schema.",
+                title: "Structured planning + SQL generation",
+                desc: "A structured planner outputs a JSON query plan before any SQL is written. The generator reads live column names and sample rows from your database at inference time.",
                 icon: (
                   <svg
                     width="18"
@@ -784,8 +789,8 @@ export default function LandingPage() {
               },
               {
                 num: "03",
-                title: "Validation + self-correction",
-                desc: "SQL is checked for safety and correctness via EXPLAIN. On failure, the error feeds back to the generator — up to 3 retries.",
+                title: "Validation + typed retry",
+                desc: "SQL is checked against a keyword blocklist, live schema, and EXPLAIN QUERY PLAN. Failures are classified into 8 error types — each triggers a targeted correction hint, up to 3 retries.",
                 icon: (
                   <svg
                     width="18"
@@ -803,7 +808,7 @@ export default function LandingPage() {
               {
                 num: "04",
                 title: "Insight synthesis",
-                desc: "Results pass through anomaly detection (z-score), trend analysis (MoM), and auto chart classification before streaming to UI.",
+                desc: "Results pass through z-score anomaly detection and month-over-month trend analysis. The synthesizer returns structured JSON — answer, chart type, anomaly flag — not freeform prose.",
                 icon: (
                   <svg
                     width="18"
@@ -877,17 +882,10 @@ export default function LandingPage() {
               fontSize: "clamp(32px, 3.5vw, 44px)",
             }}
           >
-            Built for engineers,
+            Not a single agent.
             <br />
-            readable by anyone
+            A structured reasoning pipeline.
           </h2>
-          <p
-            className="text-center text-[14px] max-w-[480px] mx-auto mb-12 leading-relaxed"
-            style={{ color: "#8fa3b0" }}
-          >
-            Every feature was designed to be explainable in an interview and demonstrable in
-            a live demo.
-          </p>
 
           <div className="grid grid-cols-3 gap-3.5 max-w-[900px] mx-auto">
             {[
@@ -899,27 +897,27 @@ export default function LandingPage() {
                   borderColor: "rgba(45,212,191,0.15)",
                 },
                 title: "LangGraph agent graph",
-                desc: "Explicit 4-node graph — planner, generator, validator, synthesizer. Every step is logged, observable via LangSmith, and independently testable.",
+                desc: "A typed AgentState flows through a 13-node StateGraph. Every node reads and writes named fields explicitly — no implicit chaining. Routing is conditional and auditable. Each node is independently testable.",
               },
               {
-                tag: "Performance",
+                tag: "AI",
                 tagStyle: {
-                  backgroundColor: "rgba(14,165,233,0.08)",
-                  color: "#0ea5e9",
-                  borderColor: "rgba(14,165,233,0.15)",
+                  backgroundColor: "rgba(45,212,191,0.08)",
+                  color: "#2dd4bf",
+                  borderColor: "rgba(45,212,191,0.15)",
                 },
-                title: "Semantic query caching",
-                desc: "Questions are embedded and checked against Redis before hitting the LLM. Semantically similar queries (>0.92 cosine similarity) return cached results instantly.",
+                title: "Schema-grounded generation",
+                desc: "At inference time, the generator queries your live database for actual column names and sample rows. The LLM never invents schema — it reads it fresh on every request.",
               },
               {
-                tag: "Safety",
+                tag: "SAFETY",
                 tagStyle: {
                   backgroundColor: "rgba(248,113,113,0.08)",
                   color: "#f87171",
                   borderColor: "rgba(248,113,113,0.15)",
                 },
                 title: "Read-only SQL enforcement",
-                desc: "Every generated query is blocked from writes at two layers: a rule-based allowlist and a read-only database user. No DROP, DELETE, or INSERT ever runs.",
+                desc: "Every query passes a keyword blocklist (DROP, DELETE, INSERT, ALTER, TRUNCATE), schema column validation, and EXPLAIN QUERY PLAN before execution. No write operation has a path to the database.",
               },
               {
                 tag: "AI",
@@ -928,8 +926,8 @@ export default function LandingPage() {
                   color: "#2dd4bf",
                   borderColor: "rgba(45,212,191,0.15)",
                 },
-                title: "Schema-aware RAG",
-                desc: "Your schema is chunked and embedded into pgvector at startup. Retrieval pulls only the relevant tables — cutting token usage ~58% vs full-schema prompting.",
+                title: "Intent correction layer",
+                desc: "After intent classification, a deterministic rule layer checks the question against explicit signal sets and overrides incorrect type_filter values. The most common hallucination class is eliminated before it reaches the planner.",
               },
               {
                 tag: "AI",
@@ -938,18 +936,18 @@ export default function LandingPage() {
                   color: "#2dd4bf",
                   borderColor: "rgba(45,212,191,0.15)",
                 },
-                title: "Anomaly detection",
-                desc: "After every query, numeric columns are checked against a 30-day rolling z-score. Statistical outliers surface automatically — no extra questions needed.",
+                title: "Post-execution analytics",
+                desc: "After every query, numeric columns are checked with z-score anomaly detection and results are analyzed for period-over-period change. Both run unconditionally on every result set — no extra prompt needed.",
               },
               {
-                tag: "Performance",
+                tag: "RELIABILITY",
                 tagStyle: {
                   backgroundColor: "rgba(14,165,233,0.08)",
                   color: "#0ea5e9",
                   borderColor: "rgba(14,165,233,0.15)",
                 },
-                title: "SSE streaming",
-                desc: "Tokens stream from FastAPI → Next.js via Server-Sent Events using the Vercel AI SDK. Sub-200ms time to first token, no polling, no refresh.",
+                title: "Typed error classification",
+                desc: "SQL failures are classified into 8 error types — no_such_column, syntax_error, type_mismatch, and more. Each type maps to a specific retry hint injected into the next generation attempt.",
               },
             ].map((feat, i) => (
               <div
@@ -1005,28 +1003,17 @@ export default function LandingPage() {
             <br />
             production-ready
           </h2>
-          <p
-            className="text-center text-[14px] max-w-[480px] mx-auto mb-12 leading-relaxed"
-            style={{ color: "#8fa3b0" }}
-          >
-            Every technology choice is intentional and can be justified in a system design
-            conversation.
-          </p>
 
           <div className="flex flex-wrap gap-2 justify-center max-w-[660px] mx-auto">
             {[
               { name: "Next.js 14", color: "#61dafb" },
               { name: "Tailwind CSS", color: "#2dd4bf" },
-              { name: "shadcn/ui", color: "#6366f1" },
-              { name: "Vercel AI SDK", color: "#ef4444" },
               { name: "FastAPI", color: "#009688" },
               { name: "LangGraph", color: "#f59e0b" },
-              { name: "pgvector / Chroma", color: "#8b5cf6" },
-              { name: "Redis (Upstash)", color: "#dc2626" },
-              { name: "LangSmith tracing", color: "#22c55e" },
+              { name: "LangChain", color: "#22c55e" },
               { name: "Groq · LLaMA 3", color: "#0ea5e9" },
-              { name: "SQLAlchemy + pool", color: "#64748b" },
-              { name: "Docker Compose", color: "#f97316" },
+              { name: "SQLAlchemy", color: "#64748b" },
+              { name: "Python asyncio", color: "#a78bfa" },
             ].map((tech, i) => (
               <div
                 key={i}
@@ -1046,6 +1033,13 @@ export default function LandingPage() {
               </div>
             ))}
           </div>
+
+          <p
+            className="text-center text-[12px] mt-6 tracking-wide"
+            style={{ color: "#5a7080", fontFamily: "'DM Mono', monospace" }}
+          >
+            Supports SQLite, MySQL, and PostgreSQL as database backends.
+          </p>
         </section>
 
         {/* CTA */}
@@ -1071,13 +1065,13 @@ export default function LandingPage() {
           >
             Ask your first question
             <br />
-            in 30 seconds
+            in seconds
           </h2>
           <p
             className="text-[14px] mb-7 max-w-[400px] mx-auto"
             style={{ color: "#8fa3b0" }}
           >
-            No setup needed. Load the demo database and start talking to your data right now.
+            No setup. Click demo, ask anything, see the agent run.
           </p>
           <div className="flex gap-2.5 justify-center flex-wrap">
             <button
@@ -1105,7 +1099,7 @@ export default function LandingPage() {
               Try with demo data
             </button>
             <a
-              href="https://github.com/maanvi14/ChatSQL-AI-Powered-Data-Query-App"
+              href="https://github.com/maanvi14/ConvoQL"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 px-6 py-3 bg-transparent rounded-lg text-[13px] transition-all hover:border-[#8fa3b0] no-underline"
@@ -1131,11 +1125,11 @@ export default function LandingPage() {
             className="text-[10px] tracking-wide"
             style={{ color: "#5a7080", fontFamily: "'DM Mono', monospace" }}
           >
-            ConvoQL · built by Maanvi · 2025
+            ConvoQL · built by Maanvi · 2026
           </div>
           <div className="flex gap-5">
             <a
-              href="https://github.com/maanvi14/ChatSQL-AI-Powered-Data-Query-App"
+              href="https://github.com/maanvi14/ConvoQL"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[11px] no-underline transition-colors hover:text-[#e8edf2]"
@@ -1144,14 +1138,9 @@ export default function LandingPage() {
               GitHub
             </a>
             <a
-              href="#"
-              className="text-[11px] no-underline transition-colors hover:text-[#e8edf2]"
-              style={{ color: "#5a7080" }}
-            >
-              Architecture
-            </a>
-            <a
-              href="#"
+              href="https://www.linkedin.com/in/maanvi-5b0940279/"
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-[11px] no-underline transition-colors hover:text-[#e8edf2]"
               style={{ color: "#5a7080" }}
             >

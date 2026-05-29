@@ -28,6 +28,20 @@ export interface QueryResponse {
   error?: string | null;
 }
 
+export interface ConnectionTestResponse {
+  success: boolean;
+  dialect: string;
+  tables_count?: number;
+  message?: string;
+}
+
+export interface ConnectionResponse {
+  session_id: string;
+  dialect: string;
+  tables_count: number;
+  message: string;
+}
+
 export async function querySync(question: string, sessionId?: string, dbUrl?: string): Promise<QueryResponse> {
   const res = await fetch(`${API_BASE}/api/query`, {
     method: "POST",
@@ -111,5 +125,53 @@ export async function createSession(dbUrl?: string) {
     body: JSON.stringify({ db_url: dbUrl || null }),
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ─── Connection API ───────────────────────────────────────────────
+
+export async function testConnection(
+  dbType: string,
+  connectionString?: string,
+  filename?: string
+): Promise<ConnectionTestResponse> {
+  const res = await fetch(`${API_BASE}/api/connect/test`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      db_type: dbType,
+      connection_string: connectionString || null,
+      filename: filename || null,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || "Connection test failed");
+  }
+  return res.json();
+}
+
+export async function connectDatabase(
+  dbType: string,
+  connectionString?: string,
+  file?: File
+): Promise<ConnectionResponse> {
+  const formData = new FormData();
+  formData.append("db_type", dbType);
+  if (connectionString) {
+    formData.append("connection_string", connectionString);
+  }
+  if (file) {
+    formData.append("file", file);
+  }
+
+  const res = await fetch(`${API_BASE}/api/connect`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || "Failed to connect database");
+  }
   return res.json();
 }

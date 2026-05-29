@@ -242,26 +242,32 @@ export default function SQLPanel({
         borderLeft: "1px solid #1e2a35",
       }}
     >
-      {/* Close button for mobile */}
-      {onClose && (
-        <button
-          onClick={onClose}
-          className="absolute top-3 right-3 z-10 p-1 rounded-md hover:bg-[#1c2822] transition-colors"
-          style={{ color: "#5a7080" }}
-        >
-          <X className="w-4 h-4" />
-        </button>
-      )}
-
-      {/* Header */}
+      {/* Header - clickable to close */}
       <div className="px-4 pt-3 pb-0 flex-shrink-0" style={{ borderBottom: "1px solid #1e2a35" }}>
-        <div
-          className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-widest mb-2.5"
-          style={{ color: "#5a7080" }}
+        <button 
+          className="flex items-center justify-between mb-2.5 cursor-pointer group text-left w-full"
+          style={{ backgroundColor: "transparent" }}
+          onClick={onClose}
+          title="Click to close SQL inspector"
+          aria-label="Close SQL inspector"
         >
-          <Code className="w-3.5 h-3.5" />
-          SQL Inspector
-        </div>
+          <div
+            className="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-widest"
+            style={{ color: "#5a7080" }}
+          >
+            <Code className="w-3.5 h-3.5" />
+            SQL Inspector
+          </div>
+          <div
+            className="p-1.5 rounded-md transition-all opacity-0 group-hover:opacity-100"
+            style={{ 
+              color: "#8fa3b0",
+              border: "1px solid #243040",
+            }}
+          >
+            <X className="w-4 h-4" />
+          </div>
+        </button>
         <div className="flex">
           {tabs.map((tab) => (
             <button

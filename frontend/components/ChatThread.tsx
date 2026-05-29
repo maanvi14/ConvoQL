@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Send, Sparkles, BarChart3, LineChart, PieChart, Table, ChevronRight } from "lucide-react";
+import { Send, Sparkles, BarChart3, LineChart, PieChart, Table, ChevronRight, Plus } from "lucide-react";
 import { querySync, createSession } from "@/lib/api";
 import AutoChart from "./AutoChart";
 
@@ -162,22 +162,15 @@ export default function ChatThread({
         </div>
         <div className="w-px h-5 mx-2" style={{ backgroundColor: "#1e2a35" }} />
         <div className="flex gap-0.5">
-          {[
-            { icon: <Sparkles className="w-3.5 h-3.5" />, label: "Chat", active: true },
-            { icon: <BarChart3 className="w-3.5 h-3.5" />, label: "SQL", active: false },
-          ].map((tab) => (
-            <button
-              key={tab.label}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] transition-all"
-              style={{
-                color: tab.active ? "#e8edf2" : "#5a7080",
-                backgroundColor: tab.active ? "#1c2822" : "transparent",
-              }}
-            >
-              {tab.icon}
-              {tab.label}
-            </button>
-          ))}
+          <button
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] transition-all"
+            style={{
+              color: "#e8edf2",
+              backgroundColor: "#1c2822",
+            }}
+          >
+            Chat
+          </button>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           <button
@@ -185,7 +178,7 @@ export default function ChatThread({
             style={{ backgroundColor: "#2dd4bf", color: "#080c10" }}
             onClick={() => setMessages([])}
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <Plus className="w-3.5 h-3.5" />
             New chat
           </button>
         </div>

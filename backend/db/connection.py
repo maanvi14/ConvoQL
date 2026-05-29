@@ -20,11 +20,17 @@ class DBManager:
         self._schema_cache = None
 
     async def initialize(self, connection_string: Optional[str] = None):
-        """Initialize database connection.
+        """Initialize database connection. Re-initializes if already connected.
 
         Args:
             connection_string: SQLAlchemy connection string. If None, uses default from settings.
         """
+        # Close existing connection if any
+        if self.engine:
+            await self.engine.dispose()
+            self._schema_cache = None
+            print("[DBManager] Closed previous connection")
+
         conn_str = connection_string or settings.DATABASE_URL
 
         # Detect dialect
@@ -136,9 +142,14 @@ class DBManager:
                             "default": col[3],
                         })
 
+                # Get row count
+                count_result = await conn.execute(text(f"SELECT COUNT(*) FROM {table_name}"))
+                row_count = count_result.scalar() or 0
+
                 schema["tables"].append({
                     "name": table_name,
                     "columns": columns,
+                    "row_count": row_count,
                 })
 
         self._schema_cache = schema

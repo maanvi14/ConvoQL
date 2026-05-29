@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Search, Table, ChevronDown, ChevronRight } from "lucide-react";
+import { Search, ChevronDown, ChevronRight, X } from "lucide-react";
 import { getSchema } from "@/lib/api";
 
 interface TableInfo {
@@ -21,7 +21,13 @@ const SUGGESTIONS = [
   "Average daily spend",
 ];
 
-export default function SchemaExplorer({ schema, setSchema }: { schema: any, setSchema: any }) {
+interface SchemaExplorerProps {
+  schema: any;
+  setSchema: any;
+  onClose?: () => void;
+}
+
+export default function SchemaExplorer({ schema, setSchema, onClose }: SchemaExplorerProps) {
   const [expandedTables, setExpandedTables] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTable, setActiveTable] = useState<string>("");
@@ -61,16 +67,22 @@ export default function SchemaExplorer({ schema, setSchema }: { schema: any, set
 
   return (
     <div
-      className="w-60 flex flex-col h-full overflow-hidden flex-shrink-0"
+      className="w-60 flex flex-col h-full overflow-hidden flex-shrink-0 relative"
       style={{
         backgroundColor: "#0e1318",
         borderRight: "1px solid #1e2a35",
       }}
     >
-      {/* Brand */}
-      <div
-        className="p-3.5 flex items-center gap-2.5 flex-shrink-0"
-        style={{ borderBottom: "1px solid #1e2a35" }}
+      {/* Brand - clickable to close */}
+      <button
+        className="p-3.5 flex items-center gap-2.5 flex-shrink-0 cursor-pointer group text-left w-full"
+        style={{ 
+          borderBottom: "1px solid #1e2a35",
+          backgroundColor: "transparent",
+        }}
+        onClick={onClose}
+        title="Click to close schema"
+        aria-label="Close schema explorer"
       >
         <div
           className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0"
@@ -83,7 +95,7 @@ export default function SchemaExplorer({ schema, setSchema }: { schema: any, set
             CQ
           </span>
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="text-sm font-medium" style={{ color: "#e8edf2" }}>
             ConvoQL
           </div>
@@ -91,7 +103,16 @@ export default function SchemaExplorer({ schema, setSchema }: { schema: any, set
             Conversational Analytics
           </div>
         </div>
-      </div>
+        <div
+          className="p-1.5 rounded-md transition-all opacity-0 group-hover:opacity-100"
+          style={{ 
+            color: "#8fa3b0",
+            border: "1px solid #243040",
+          }}
+        >
+          <X className="w-4 h-4" />
+        </div>
+      </button>
 
       {/* Connection Badge */}
       <div
