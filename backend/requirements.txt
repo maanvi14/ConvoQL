@@ -30,8 +30,8 @@ redis==5.0.8
 langsmith==0.1.125
 
 # Data / Analytics
-pandas==2.2.2
-numpy==1.26.4
+numpy==1.24.3
+pandas==2.0.3
 
 # Utils
 pydantic==2.8.2
