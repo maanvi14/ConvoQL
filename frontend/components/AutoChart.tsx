@@ -87,9 +87,14 @@ export default function AutoChart({ data, chartType: initialType, title }: AutoC
     return typeof val === "string" && (c.toLowerCase().includes("date") || c.toLowerCase().includes("month") || c.toLowerCase().includes("year"));
   });
 
+  const getValue = (row: Record<string, any>, col: string | undefined): any => {
+    if (!col) return undefined;
+    return row[col];
+  };
+
   const chartData = rows.map((row) => ({
-    name: String(row[labelCol] || row[dateCol] || "Unknown"),
-    value: Number(row[valueCol] || 0),
+    name: String(getValue(row, labelCol) || getValue(row, dateCol) || "Unknown"),
+    value: Number(getValue(row, valueCol) || 0),
     ...row,
   }));
 
