@@ -1,4 +1,5 @@
 """ConvoQL backend main entry point."""
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -9,10 +10,16 @@ from db.connection import db_manager
 
 app = FastAPI(title="ConvoQL API", version="1.0.0")
 
-# CORS for frontend
+# CORS - Use environment variable for origins (comma-separated)
+# Render env var: ALLOWED_ORIGINS=https://convo-ql.vercel.app,http://localhost:3000
+ALLOWED_ORIGINS = os.environ.get(
+    "ALLOWED_ORIGINS", 
+    "http://localhost:3000,http://127.0.0.1:3000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -31,4 +38,6 @@ async def health():
     return {"status": "ok"}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+    
