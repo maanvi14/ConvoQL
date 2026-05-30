@@ -90,7 +90,7 @@ export default function ChatThread({
         role: "assistant",
         content: data.answer || data.explanation || "Here's what I found:",
         sql: data.sql || data.generated_sql,
-        hasChart: data.has_chart || !!data.chart_type || (data.chartType && data.chartType !== "table"),
+        hasChart: !!(data.has_chart || data.chart_type || (data.chartType && data.chartType !== "table")),
         chartType: (data.chart_type || data.chartType) as ChartType,
         chartTitle: data.chart_title || data.chartTitle || input,
         hasTable: data.has_table || (resultData.rows?.length > 0 && resultData.rows?.length <= 50),
