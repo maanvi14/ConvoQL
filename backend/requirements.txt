@@ -21,12 +21,16 @@ asyncpg==0.29.0
 
 # Vector Store
 chromadb==0.5.5
+
+# Embeddings (CPU-only torch — MUST be before sentence-transformers)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.3.0+cpu
 sentence-transformers==3.0.1
 
 # Cache
 redis==5.0.8
 
-# Observability - fixed to satisfy langchain-core
+# Observability
 langsmith==0.1.125
 
 # Data / Analytics
