@@ -1,5 +1,8 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
+const API_BASE = (() => {
+  const url = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  // Strip trailing /api if present (backend routes already include /api prefix)
+  return url.replace(/\/api\/?$/, "");
+})();
 export interface QueryResponse {
   answer: string;
   explanation?: string;
