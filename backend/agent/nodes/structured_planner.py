@@ -91,6 +91,21 @@ CRITICAL RULES:
 10. For "account" questions: account column is IN transactions table. No JOIN needed.
 11. For "tag" questions: tags column is IN transactions table. No JOIN needed. NEVER add type filter for tag searches.
 12. ABSOLUTE RULE: If type_filter in intent is null, do NOT add any type filter to where_filters.
+13. NEVER hallucinate columns that don't exist in the schema. If a column is not in the schema, DO NOT use it.
+14. The transactions table has: transaction_id, date, description, amount, type, category, account, merchant, payment_method, tags. ALL needed columns are here.
+15. DO NOT JOIN with categories table unless the question explicitly asks for category metadata like color, icon, or category descriptions.
+16. "Show me my Shopping transactions" only needs the transactions table — category is already a column there.
+17. JOIN RULES:
+    - NEVER join a table to itself (e.g., "budgets INNER JOIN budgets" is WRONG)
+    - The left table in FROM must be different from the right table in JOIN
+    - For budget queries, use: FROM transactions INNER JOIN budgets ON transactions.category = budgets.category
+    - For account queries, use: FROM accounts (no JOIN needed for simple balance queries)
+    - NEVER use "transactions.date" if transactions is not the primary table — check which table has the date column
+18. COLUMN QUALIFICATION:
+    - When multiple tables are used, ALWAYS qualify column names with table name: "table.column"
+    - Example: "transactions.category" not just "category"
+    - Example: "budgets.allocated" not just "allocated"
+    - The validator will reject bare column names that exist in multiple tables
 
 JSON PLAN ONLY:"""
 
@@ -134,6 +149,19 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             intent_data["requires_join"] = True
             requires_join = True
 
+    # === CRITICAL FIX: NEVER force categories table join for simple category queries ===
+    # Category names like "Shopping", "Food", "Travel" are columns IN the transactions table.
+    # Only join with categories table if explicitly asking for metadata (color, icon, etc.)
+    category_metadata_signals = ["color", "icon", "description", "category metadata", "category info"]
+    needs_category_join = any(signal in question_lower for signal in category_metadata_signals)
+
+    if has_categories and not needs_category_join:
+        # If the question only mentions a category name but not metadata, don't use categories table
+        if any(cat in question_lower for cat in ["shopping", "food", "travel", "health", "entertainment", "groceries"]):
+            print(f"[Planner] Category query detected without metadata request. Forcing single-table mode.")
+            intent_data["requires_join"] = False
+            requires_join = False
+
     top_k = 4 if requires_join else 1
 
     relevant = schema_rag.retrieve_relevant(state["question"], top_k=top_k)
@@ -148,12 +176,12 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             rows = sample.get("rows", [])
             if rows:
-                                sample_data_parts.append(
-                    f"Table `{rel['name']}`:\n" + "\n".join([str(r) for r in rows])
+                sample_data_parts.append(
+                    f"Table `{rel['name']}`:\\n" + "\\n".join([str(r) for r in rows])
                 )
         except Exception:
             pass
-    sample_data_text = "\n\n".join(sample_data_parts) if sample_data_parts else "No sample data."
+    sample_data_text = "\\n\\n".join(sample_data_parts) if sample_data_parts else "No sample data."
 
     # Log
     stats = schema_rag.get_stats()
@@ -200,6 +228,25 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             plan["joins"] = []
             print("[Planner] Single transactions table detected. Forcing empty joins.")
 
+        # === CRITICAL FIX: Remove categories table joins for simple category queries ===
+        joins = plan.get("joins", [])
+        cleaned_joins = []
+        for join in joins:
+            if join and join.get("right_table"):
+                right_table = join["right_table"].lower()
+                # Remove categories joins unless explicitly needed
+                if right_table == "categories" and not needs_category_join:
+                    print(f"[Planner] REMOVING unnecessary categories table join: {join}")
+                    continue
+                # Remove invalid joins
+                if join.get("on_condition"):
+                    on_cond = join["on_condition"].lower()
+                    if "categories.category" in on_cond or "category = category" in on_cond:
+                        print(f"[Planner] Removing incorrect join: {join}")
+                        continue
+            cleaned_joins.append(join)
+        plan["joins"] = cleaned_joins
+
         # === TYPE FILTER ENFORCEMENT ===
         type_filter = intent_data.get("type_filter")
         where_filters = plan.get("where_filters", [])
@@ -221,18 +268,6 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             # Ensure credit filter exists
             if not any("type = 'credit'" in f.lower() for f in where_filters if isinstance(f, str)):
                 plan["where_filters"].append("type = 'credit'")
-
-        # Clean invalid joins
-        joins = plan.get("joins", [])
-        cleaned_joins = []
-        for join in joins:
-            if join and join.get("on_condition"):
-                on_cond = join["on_condition"].lower()
-                if "categories.category" in on_cond or "category = category" in on_cond:
-                    print(f"[Planner] Removing incorrect join: {join}")
-                    continue
-            cleaned_joins.append(join)
-        plan["joins"] = cleaned_joins
 
     except Exception as e:
         print(f"Structured planning failed: {e}. Using fallback plan.")

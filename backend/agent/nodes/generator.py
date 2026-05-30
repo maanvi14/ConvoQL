@@ -143,6 +143,12 @@ DETECTED INTENT:
 12. TYPE FILTER RULE: Only add type = 'debit' or type = 'credit' when the question EXPLICITLY asks for expenses or income. NEVER add type filter for tag, category, or merchant searches.
 13. COLUMN NAMES: Use exact names from schema. If a table has transaction_id, NEVER use id.
 14. TAG FILTERING: The tags column is comma-separated TEXT. Use tags LIKE '%value%' — NEVER tags.name or JSON syntax.
+15. DATE FILTERING:
+    - For specific months like "March 2026": use strftime('%Y-%m', date) = '2026-03'
+    - NEVER use strftime('%Y-%m', date) = strftime('%Y-%m', '2026-03') — this is WRONG
+    - NEVER combine this_month/last_month with a specific month — use ONLY one date filter
+    - For "May 2026": strftime('%Y-%m', date) = '2026-05' (direct string comparison)
+    - The date column stores dates as TEXT in 'YYYY-MM-DD' format
 
 === CORRECT EXAMPLES ===
 
@@ -193,6 +199,17 @@ FROM transactions
 WHERE tags LIKE '%health%' OR tags LIKE '%fitness%'
 ORDER BY date DESC
 LIMIT 50
+```
+
+Example F — Specific month query:
+Question: "How much did I spend on Food in May 2026?"
+```sql
+SELECT category, SUM(ABS(amount)) AS total
+FROM transactions
+WHERE type = 'debit'
+  AND category = 'Food'
+  AND strftime('%Y-%m', date) = '2026-05'
+GROUP BY category
 ```
 
 Generate ONLY the SQL query inside the code block:

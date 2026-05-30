@@ -57,7 +57,7 @@ def _extract_bare_column_refs(sql: str) -> List[str]:
     if select_match:
         select_part = select_match.group(1)
         # Simple approach: extract words that look like column names
-        raw_cols = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', select_part)
+        raw_cols = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', select_part)
         select_cols = [c for c in raw_cols if c.lower() not in aliases]
 
     # Extract from WHERE, GROUP BY, ORDER BY, HAVING
@@ -65,12 +65,12 @@ def _extract_bare_column_refs(sql: str) -> List[str]:
     where_cols = []
     if where_match:
         where_part = where_match.group(1)
-        where_cols = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', where_part)
+        where_cols = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', where_part)
 
     group_match = re.search(r'GROUP\s+BY\s+(.*?)(?:ORDER\s+BY|HAVING|LIMIT|$)', sql_clean, re.IGNORECASE | re.DOTALL)
     group_cols = []
     if group_match:
-        group_cols = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', group_match.group(1))
+        group_cols = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', group_match.group(1))
 
     order_match = re.search(r'ORDER\s+BY\s+(.*?)(?:LIMIT|$)', sql_clean, re.IGNORECASE | re.DOTALL)
     order_cols = []
@@ -78,7 +78,7 @@ def _extract_bare_column_refs(sql: str) -> List[str]:
         # In ORDER BY, aliases ARE valid references to SELECT expressions
         # So we should NOT flag aliases used in ORDER BY
         order_part = order_match.group(1)
-        order_cols = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', order_part)
+        order_cols = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', order_part)
         # Remove aliases from validation since they're valid in ORDER BY
         order_cols = [c for c in order_cols if c.lower() not in aliases]
 
@@ -221,4 +221,5 @@ async def validator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     state["valid"] = True
     state["error"] = None
     return state
+
 

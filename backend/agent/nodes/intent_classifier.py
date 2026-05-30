@@ -11,20 +11,38 @@ settings = get_settings()
 
 # === DETERMINISTIC TYPE FILTER SIGNALS ===
 # These are checked AFTER the LLM to override hallucinations
+# CRITICAL FIX: Removed "shopping" - it's a category name, not an expense signal
+# Category names should NEVER trigger type_filter. Only explicit expense/income verbs should.
 DEBIT_SIGNALS = {
-    "expense", "expenses", "spent", "spending", "spend", "purchase", "purchased",
-    "paid", "pay", "payment", "buy", "bought", "debit", "cost", "costs",
-    "withdrawal", "withdraw", "withdrawn", "charge", "charges", "fee", "fees",
-    "outgoing", "outflow", "expenditure", "outgoings", "outgo", "spendings",
-    "shopping", "purchases", "bills", "bill"
+    "expense", "expenses", "spent", "spending", "spend",
+    "purchase", "purchased", "purchases",
+    "paid", "pay", "payment", "payments",
+    "buy", "bought",
+    "debit", "debits",
+    "cost", "costs",
+    "withdrawal", "withdraw", "withdrawn",
+    "charge", "charges",
+    "fee", "fees",
+    "outgoing", "outflow",
+    "expenditure", "outgoings", "outgo", "spendings",
+    "bills", "bill"
+    # REMOVED: "shopping" — category name, not expense verb
 }
 
 CREDIT_SIGNALS = {
-    "income", "incomes", "earned", "earn", "earnings", "receive", "received",
-    "receiving", "salary", "salaries", "credited", "credit", "deposit", "deposited",
-    "refund", "refunded", "refunds", "incoming", "inflow", "revenue", "revenues",
-    "wage", "wages", "bonus", "bonuses", "dividend", "dividends", "interest",
-    "profit", "profits", "gains", "gain"
+    "income", "incomes", "earned", "earn", "earnings",
+    "receive", "received", "receiving",
+    "salary", "salaries", "credited", "credit", "credits",
+    "deposit", "deposited",
+    "refund", "refunded", "refunds",
+    "incoming", "inflow",
+    "revenue", "revenues",
+    "wage", "wages",
+    "bonus", "bonuses",
+    "dividend", "dividends",
+    "interest",
+    "profit", "profits",
+    "gains", "gain"
 }
 
 # Signals that REQUIRE multi-table JOINs
@@ -54,6 +72,9 @@ CRITICAL RULES for type_filter (debit/credit):
 2. NEVER infer type_filter from category names, tags, or merchant names
 3. Tags and categories exist on BOTH debit and credit transactions
 4. When in doubt, type_filter MUST be null
+5. "Shopping" is a CATEGORY — it does NOT mean expenses
+6. "Food" is a CATEGORY — it does NOT mean expenses
+7. "Travel" is a CATEGORY — it does NOT mean expenses
 
 Return ONLY a JSON object:
 {{
@@ -171,3 +192,4 @@ async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **state,
         "intent": intent_data,
     }
+

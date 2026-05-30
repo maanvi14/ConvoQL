@@ -95,13 +95,14 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
             entities["columns"].extend(refs)
 
     # === SMART VALUE EXTRACTION ===
+
     # Extract account names mentioned in question
+    # CRITICAL FIX: Only extract actual bank names, not category names like "Side Income"
     account_names = ["hdfc", "icici", "paytm"]
     for acc in account_names:
-        # Match "HDFC" but not "HDFC Bank" (that's the bank_name column)
         pattern = rf'\b{acc}\b'
         if re.search(pattern, question, re.IGNORECASE):
-            # Check if it's followed by "account" or "transactions"
+            # Check if it's followed by "account" or "transactions" or "balance"
             if re.search(rf'\b{acc}\s+(account|transactions|balance)\b', question, re.IGNORECASE):
                 entities["values"].append({
                     "type": "account",
@@ -117,7 +118,6 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
                       "pvr cinemas", "taj restaurant", "social restaurant"]
     for merchant in merchant_names:
         if merchant in question:
-            # Normalize merchant name
             normalized = merchant.title()
             if merchant == "apollo pharmacy":
                 normalized = "Apollo Pharmacy"
@@ -151,29 +151,46 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
             })
 
     # Extract category names
+    # CRITICAL FIX: "Cash" and "UPI" should be payment methods, not categories
+    # Only extract as category if NOT preceded by payment method words
     category_names = ["groceries", "shopping", "entertainment", "transport", 
                       "food", "health", "fitness", "travel", "utilities",
-                      "housing", "income", "side income", "investment", "cash"]
+                      "housing", "income", "side income", "investment"]
+    # REMOVED "cash" from category_names - it's a payment method
     for cat in category_names:
-        # Use word boundary to avoid partial matches
         pattern = rf'\b{re.escape(cat)}\b'
         if re.search(pattern, question, re.IGNORECASE):
-            # Don't add if it's part of a larger phrase like "shopping transactions"
-            # where we already captured it as a table
             entities["values"].append({
                 "type": "category",
                 "value": cat.title(),
                 "column": "category",
             })
 
+    # CRITICAL FIX: Extract payment methods separately
+    payment_method_names = ["upi", "cash", "card", "netbanking", "net banking"]
+    for pm in payment_method_names:
+        pattern = rf'\b{re.escape(pm)}\b'
+        if re.search(pattern, question, re.IGNORECASE):
+            # Normalize payment method name
+            normalized = pm.title()
+            if pm == "netbanking" or pm == "net banking":
+                normalized = "NetBanking"
+            entities["values"].append({
+                "type": "payment_method",
+                "value": normalized,
+                "column": "payment_method",
+            })
+
     # ============================================================================
     # FIX: Extract tag values from questions like "tagged with 'subscription'"
+    # CRITICAL FIX: Use double-quoted raw strings to avoid SyntaxError with single quotes
     # ============================================================================
     tag_patterns = [
-        r'tagged\s+(?:with\s+)?[\'"]([^\'"]+)[\'"]',  # FIXED: single-quoted raw string
-        r'tag\s+(?:is\s+)?[\'"]([^\'"]+)[\'"]',       # FIXED: single-quoted raw string
-        r'tags?\s+(?:like|containing|with)\s+[\'"]([^\'"]+)[\'"]',  # FIXED
-        r'[\'"]([^\'"]+)[\'"]\s+tag',                 # FIXED: single-quoted raw string
+        # Double-quoted raw strings - safe for regexes containing single quotes
+        r"tagged\s+(?:with\s+)?['\"]([^'\"]+)['\"]",
+        r"tag\s+(?:is\s+)?['\"]([^'\"]+)['\"]",
+        r"tags?\s+(?:like|containing|with)\s+['\"]([^'\"]+)['\"]",
+        r"['\"]([^'\"]+)['\"]\s+tag",
     ]
     for pattern in tag_patterns:
         matches = re.findall(pattern, question, re.IGNORECASE)
@@ -186,11 +203,13 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
             })
 
     # Also catch "tagged with subscription" (no quotes)
-    tag_bare_pattern = r'tagged\s+(?:with\s+)?([a-zA-Z_][a-zA-Z0-9_]*)'
+    # FIXED: Pattern requires "tagged with " prefix, captures the word after it
+    # Excludes common words like "with" from being captured as tag values
+    tag_bare_pattern = r"tagged\s+with\s+([a-zA-Z_][a-zA-Z0-9_]*)"
     bare_tag_matches = re.findall(tag_bare_pattern, question, re.IGNORECASE)
     for match in bare_tag_matches:
         # Avoid false positives on common words
-        if match.lower() not in {"the", "a", "an", "my", "your", "all", "any", "some"}:
+        if match.lower() not in {"the", "a", "an", "my", "your", "all", "any", "some", "with"}:
             entities["values"].append({
                 "type": "tag",
                 "value": match.strip(),
@@ -199,6 +218,12 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
             })
 
     # Date extraction
+    month_names = {
+        'january': '01', 'february': '02', 'march': '03', 'april': '04',
+        'may': '05', 'june': '06', 'july': '07', 'august': '08',
+        'september': '09', 'october': '10', 'november': '11', 'december': '12'
+    }
+
     date_patterns = [
         (r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})\b', 'month_year'),
         (r'\b(\d{4})-(\d{2})\b', 'year_month'),
@@ -211,15 +236,48 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
     for pattern, dtype in date_patterns:
         matches = re.findall(pattern, question, re.IGNORECASE)
         for match in matches:
-            entities["date_references"].append({
-                "type": dtype,
-                "match": match if isinstance(match, str) else " ".join(match),
-            })
+            if dtype == 'month_year':
+                month_name, year = match
+                month_num = month_names.get(month_name.lower(), '01')
+                formatted_date = f"{year}-{month_num}"
+                entities["date_references"].append({
+                    "type": dtype,
+                    "match": match if isinstance(match, str) else " ".join(match),
+                    "formatted": formatted_date,
+                    "sql_filter": f"strftime('%Y-%m', date) = '{formatted_date}'"
+                })
+            elif dtype == 'year_month':
+                year, month = match
+                formatted_date = f"{year}-{month}"
+                entities["date_references"].append({
+                    "type": dtype,
+                    "match": match if isinstance(match, str) else " ".join(match),
+                    "formatted": formatted_date,
+                    "sql_filter": f"strftime('%Y-%m', date) = '{formatted_date}'"
+                })
+            else:
+                entities["date_references"].append({
+                    "type": dtype,
+                    "match": match if isinstance(match, str) else " ".join(match),
+                })
 
     # Value extraction (amounts)
+    # CRITICAL FIX: Skip small numbers (likely LIMIT values like "top 5")
+    # Only extract amounts that look like currency values (>= 100 or have decimal)
     amount_pattern = r'\b(?:rs\.?\s*|₹\s*|inr\s*)?(\d+(?:,\d{3})*(?:\.\d{2})?)\b'
     amounts = re.findall(amount_pattern, question, re.IGNORECASE)
-    entities["values"].extend([{"type": "amount", "value": a.replace(",", ""), "column": "amount"} for a in amounts])
+    for a in amounts:
+        clean = a.replace(",", "")
+        try:
+            val = float(clean)
+            # Skip small integers that are likely LIMIT values (1-20)
+            # But keep them if they have decimal places (likely amounts)
+            if '.' in a or val >= 100 or val <= 0:
+                entities["values"].append({"type": "amount", "value": clean, "column": "amount"})
+            else:
+                print(f"[ColumnLinker] Skipping small number '{a}' (likely LIMIT value, not amount)")
+        except ValueError:
+            pass
 
     # Resolve ambiguities
     resolved = {
