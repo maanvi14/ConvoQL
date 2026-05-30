@@ -46,8 +46,12 @@ class DBManager:
 
         # Create engine with appropriate parameters
         if self._dialect == "sqlite":
+            # Ensure async driver is used for SQLite
+            async_conn_str = conn_str
+            if not "+aiosqlite" in async_conn_str:
+                async_conn_str = async_conn_str.replace("sqlite://", "sqlite+aiosqlite://")
             self.engine = create_async_engine(
-                conn_str,
+                async_conn_str,
                 echo=False,
                 future=True,
             )
