@@ -111,7 +111,7 @@ export default function ConnectPage() {
     setError(null);
     try {
       const connStr = buildConnectionString();
-      const res = await fetch(`${API_BASE}/api/connect/test`, {
+      const res = await fetch(`${API_BASE}/connect/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -143,7 +143,7 @@ export default function ConnectPage() {
         formData.append("connection_string", connStr);
       }
 
-      const res = await fetch(`${API_BASE}/api/connect`, {
+      const res = await fetch(`${API_BASE}/connect`, {
         method: "POST",
         body: formData,
       });
