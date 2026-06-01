@@ -9,7 +9,7 @@ from db.connection import db_manager
 
 settings = get_settings()
 
-# Dialect-specific date function examples - NOW WITH ROLLING WINDOWS
+# Dialect-specific date function examples - WITH ROLLING WINDOWS
 DIALECT_EXAMPLES = {
     "sqlite": {
         "this_month": "strftime('%Y-%m', date) = strftime('%Y-%m', 'now')",
@@ -43,7 +43,6 @@ DIALECT_EXAMPLES = {
     }
 }
 
-# Column name mapping for common hallucinations (fallback only)
 COLUMN_ALIASES = {
     "id": "transaction_id",
     "trans_id": "transaction_id",
@@ -60,7 +59,6 @@ COLUMN_ALIASES = {
     "sum": None,
 }
 
-# Tables and their columns — populated at runtime from DB
 TABLE_COLUMNS: Dict[str, List[str]] = {}
 
 
@@ -72,15 +70,12 @@ async def _load_schema_from_db() -> str:
     for table in schema.get("tables", []):
         table_name = table["name"]
         cols = table.get("columns", [])
-
-        # Store for validation
         TABLE_COLUMNS[table_name] = [c["name"] for c in cols]
 
         col_defs = []
         for col in cols:
             col_name = col["name"]
             col_type = col.get("type", "TEXT")
-            # CRITICAL: Annotate amount column with sign convention
             if col_name == "amount":
                 col_defs.append(f"    {col_name} {col_type}  -- NEGATIVE for debits (expenses), POSITIVE for credits (income)")
             elif col_name == "type":
@@ -103,11 +98,10 @@ Examples of tags values:
   'salary,monthly,raise'
 
 To filter by tag, ALWAYS use: tags LIKE '%tag_name%'
-NEVER use: tags.name = 'tag_name'  (this is WRONG — tags is not a JSON object)
-NEVER use: tags = 'tag_name'       (this misses multi-tag rows)
+NEVER use: tags.name = 'tag_name'
+NEVER use: tags = 'tag_name'
 """
 
-# CRITICAL SIGN CONVENTION RULES added to prompt
 SIGN_CONVENTION_RULES = """
 === CRITICAL: AMOUNT SIGN CONVENTION ===
 The `amount` column uses SIGNED values:
@@ -131,7 +125,7 @@ THEREFORE:
    WRONG: WHERE amount < 0 (this filters OUT all credits!)
 """
 
-# ROLLING WINDOW DATE RULES
+# ROLLING WINDOW DATE RULES - CLEAR INSTRUCTIONS
 DATE_FILTER_RULES = """
 === DATE FILTER RULES ===
 For time-based queries, use the CORRECT date range:
@@ -143,6 +137,9 @@ For time-based queries, use the CORRECT date range:
 - For specific months like "March 2026": strftime('%Y-%m', date) = '2026-03'
 - NEVER combine rolling window (last 6 months) with specific month filter — use ONLY one
 - The date column stores dates as TEXT in 'YYYY-MM-DD' format
+- CRITICAL: For rolling windows (last N months), use >= comparison, NOT = comparison
+  CORRECT: date >= date('now', '-6 months')
+  WRONG: strftime('%Y-%m', date) = strftime('%Y-%m', 'now', '-6 months')
 """
 
 GENERATOR_PROMPT = """You are an expert {dialect} SQL generator. You write ONLY correct, executable {dialect} queries.
@@ -195,11 +192,16 @@ DETECTED INTENT:
     - NEVER combine this_month/last_month with a specific month — use ONLY one date filter
     - For "May 2026": strftime('%Y-%m', date) = '2026-05' (direct string comparison)
     - The date column stores dates as TEXT in 'YYYY-MM-DD' format
+    - CRITICAL: For "last N months" use >= date('now', '-N months'), NOT strftime equality
 19. AMOUNT SIGN CONVENTION (CRITICAL):
     - Debits are NEGATIVE, Credits are POSITIVE
     - For spending queries: SELECT SUM(ABS(amount)) — NOT SUM(amount)
     - For spending queries: ORDER BY ABS(amount) DESC — NOT ORDER BY amount DESC
     - NEVER use amount > 0 or amount < 0 as a filter
+20. GROUP BY RULE:
+    - When using SUM/AVG/COUNT with GROUP BY, only select aggregated columns and grouping columns
+    - WRONG: SELECT date, category, SUM(amount) GROUP BY category (date not in GROUP BY)
+    - CORRECT: SELECT strftime('%Y-%m', date) AS month, category, SUM(amount) GROUP BY month, category
 
 === CORRECT EXAMPLES ===
 
@@ -224,7 +226,7 @@ GROUP BY category
 ORDER BY total_spent DESC
 ```
 
-Example C — Spending last 6 months (ROLLING WINDOW):
+Example C — Spending last 6 months (ROLLING WINDOW - use >= not =):
 Question: "Analyze my spending patterns for the last 6 months"
 ```sql
 SELECT strftime('%Y-%m', date) AS month, category, SUM(ABS(amount)) AS total_spent
@@ -280,61 +282,28 @@ Generate ONLY the SQL query inside the code block:
 """
 
 
-def _extract_all_column_refs(sql: str) -> List[str]:
-    """Extract all bare column references (not table.column) from SQL."""
-    # Remove string literals first
-    sql_no_strings = re.sub(r"'[^']*'", "''", sql)
-    sql_no_strings = re.sub(r'"[^"]*"', '""', sql_no_strings)
-
-    # Find bare column names (not preceded by table.)
-    # Pattern: word not preceded by word.
-    refs = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', sql_no_strings)
-
-    # Filter out SQL keywords
-    sql_keywords = {
-        'SELECT', 'FROM', 'WHERE', 'AND', 'OR', 'NOT', 'NULL', 'IS', 'IN', 'BETWEEN',
-        'LIKE', 'LIMIT', 'ORDER', 'BY', 'GROUP', 'HAVING', 'ASC', 'DESC', 'AS',
-        'JOIN', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'ON', 'DISTINCT', 'ALL',
-        'COUNT', 'SUM', 'AVG', 'MAX', 'MIN', 'ABS', 'ROUND', 'CAST', 'COALESCE',
-        'strftime', 'DATE_FORMAT', 'TO_CHAR', 'NOW', 'CURRENT_DATE', 'CURRENT_TIMESTAMP',
-        'WHEN', 'THEN', 'ELSE', 'END', 'CASE', 'IF', 'TRUE', 'FALSE',
-        'EXISTS', 'UNION', 'INTERSECT', 'EXCEPT', 'WITH',
-    }
-
-    return [r for r in refs if r.upper() not in sql_keywords and not r.upper().startswith('SQLITE_')]
-
-
 def _validate_and_fix_columns(sql: str) -> str:
     """Validate column names against schema and fix common hallucinations."""
     if not sql or not TABLE_COLUMNS:
         return sql
 
-    original = sql
-
-    # --- Fix 1: Replace known hallucinated bare column names ---
     for bad_col, good_col in COLUMN_ALIASES.items():
-        # Match as whole word in SELECT, WHERE, GROUP BY, ORDER BY, HAVING
         pattern = r'(?<![\w.])' + re.escape(bad_col) + r'(?![\w])'
-
         if re.search(pattern, sql, re.IGNORECASE):
             if good_col is None:
-                # Column doesn't exist — remove from SELECT list
-                # Pattern: "bad_col," or ", bad_col" at SELECT time
                 sql = re.sub(
                     r'(?i)SELECT\s+([^\n]*?)\b' + re.escape(bad_col) + r'\b\s*,?\s*',
                     lambda m: 'SELECT ' + m.group(1).replace(m.group(0).split()[-1], '').rstrip(',').rstrip(),
                     sql
                 )
-                # Remove trailing comma before FROM
                 sql = re.sub(r',\s*FROM', ' FROM', sql, flags=re.IGNORECASE)
                 print(f"[Generator] Removed hallucinated column '{bad_col}'")
             else:
                 sql = re.sub(pattern, good_col, sql, flags=re.IGNORECASE)
                 print(f"[Generator] Fixed column name: '{bad_col}' -> '{good_col}'")
 
-    # --- Fix 2: CRITICAL — catch tags.name, tags.value, tags->> etc. (JSON hallucinations) ---
     json_hallucinations = [
-        (r'\btags\.name\b', "tags LIKE '%subscription%'"),  # Most common
+        (r'\btags\.name\b', "tags LIKE '%subscription%'"),
         (r'\btags\.value\b', "tags LIKE '%value%'"),
         (r'\btags\[[^\]]+\]', "tags LIKE '%value%'"),
         (r'\btags\s*->>', "tags"),
@@ -344,18 +313,14 @@ def _validate_and_fix_columns(sql: str) -> str:
     for pattern, replacement in json_hallucinations:
         if re.search(pattern, sql, re.IGNORECASE):
             print(f"[Generator] FIXED JSON hallucination: removed tags.dot notation")
-            # We can't auto-replace the whole WHERE clause safely, so we mark for retry
-            # But we CAN fix the SELECT part
             sql = re.sub(pattern, "tags", sql, flags=re.IGNORECASE)
 
-    # --- Fix 3: Ensure WHERE tags = 'x' becomes WHERE tags LIKE '%x%' ---
     sql = re.sub(
         r"(?i)WHERE\s+(\w+)\s*=\s*['\"]([^'\"]+)['\"]",
         lambda m: f"WHERE {m.group(1)} LIKE '%{m.group(2)}%'" if m.group(1).lower() == 'tags' else m.group(0),
         sql
     )
 
-    # --- Fix 4: Remove double commas and fix spacing ---
     sql = re.sub(r',\s*,', ',', sql)
     sql = re.sub(r'SELECT\s+,', 'SELECT ', sql, flags=re.IGNORECASE)
     sql = re.sub(r',\s+FROM', ' FROM', sql, flags=re.IGNORECASE)
@@ -366,49 +331,96 @@ def _validate_and_fix_columns(sql: str) -> str:
 def _enforce_abs_for_debits(sql: str, intent_data: Dict[str, Any]) -> str:
     """CRITICAL: Ensure ABS(amount) is used for debit/spending queries."""
     type_filter = intent_data.get("type_filter") if intent_data else None
-    sql_upper = sql.upper()
+    sql_lower = sql.lower()
 
-    # If this is a debit/spending query, enforce ABS(amount)
-    if type_filter == "debit" or "type = 'debit'" in sql.lower():
-        # Check if SUM(amount) or ORDER BY amount exists without ABS
-        # Fix SUM(amount) -> SUM(ABS(amount))
-        sql = re.sub(
-            r'(?i)SUM\s*\(\s*amount\s*\)',
-            'SUM(ABS(amount))',
-            sql
-        )
-        # Fix ORDER BY amount DESC -> ORDER BY ABS(amount) DESC
-        sql = re.sub(
-            r'(?i)ORDER\s+BY\s+amount\s+DESC',
-            'ORDER BY ABS(amount) DESC',
-            sql
-        )
-        # Fix ORDER BY amount ASC -> ORDER BY ABS(amount) ASC
-        sql = re.sub(
-            r'(?i)ORDER\s+BY\s+amount\s+ASC',
-            'ORDER BY ABS(amount) ASC',
-            sql
-        )
-        # Fix MAX(amount) -> ORDER BY ABS(amount) DESC LIMIT 1 (but only in SELECT)
-        sql = re.sub(
-            r'(?i)MAX\s*\(\s*amount\s*\)',
-            'MAX(ABS(amount))',
-            sql
-        )
+    is_debit_query = (type_filter == "debit" or 
+                      "type = 'debit'" in sql_lower or 
+                      "type=\"debit\"" in sql_lower)
+
+    if is_debit_query:
+        sql = re.sub(r'(?i)SUM\s*\(\s*amount\s*\)', 'SUM(ABS(amount))', sql)
+        sql = re.sub(r'(?i)ORDER\s+BY\s+amount\s+DESC', 'ORDER BY ABS(amount) DESC', sql)
+        sql = re.sub(r'(?i)ORDER\s+BY\s+amount\s+ASC', 'ORDER BY ABS(amount) ASC', sql)
+        sql = re.sub(r'(?i)MAX\s*\(\s*amount\s*\)', 'MAX(ABS(amount))', sql)
+        sql = re.sub(r'(?i)AVG\s*\(\s*amount\s*\)', 'AVG(ABS(amount))', sql)
 
     return sql
 
 
-def _post_process_sql(sql: str, intent_data: Dict[str, Any], retry_hint: str, dialect: str = "sqlite") -> str:
+def _fix_date_filters(sql: str, question_lower: str) -> str:
+    """CRITICAL: Fix date filters for rolling windows.
+
+    Problem: LLM sometimes generates BOTH:
+      strftime('%Y-%m', date) = strftime('%Y-%m', 'now', '-6 months')  -- WRONG (equality)
+      AND date >= date('now', '-6 months')                                 -- CORRECT (range)
+
+    The equality filter only matches ONE month (6 months ago), not the rolling window.
+    """
+    # Detect if this is a rolling window query
+    is_rolling_window = any(phrase in question_lower for phrase in [
+        "last 6 months", "past 6 months", "last six months", "past six months",
+        "last 3 months", "past 3 months", "last three months", "past three months",
+        "last year", "past year", "last 12 months", "past 12 months"
+    ])
+
+    if not is_rolling_window:
+        return sql
+
+    # Remove old-style strftime equality filters that compare to a computed month
+    # Pattern: strftime('%Y-%m', date) = strftime('%Y-%m', 'now', '-N month')
+    old_pattern = r"strftime\('%Y-%m',\s*date\)\s*=\s*strftime\('%Y-%m',\s*'now',\s*'-[\d\s]+month'\)"
+    if re.search(old_pattern, sql, re.IGNORECASE):
+        sql = re.sub(old_pattern, "1=1", sql, flags=re.IGNORECASE)
+        print(f"[Generator] Removed old-style strftime equality filter for rolling window")
+
+    # Also remove any strftime('%Y-%m', date) = strftime('%Y-%m', 'now') when rolling window
+    current_month_pattern = r"strftime\('%Y-%m',\s*date\)\s*=\s*strftime\('%Y-%m',\s*'now'\)"
+    if re.search(current_month_pattern, sql, re.IGNORECASE):
+        sql = re.sub(current_month_pattern, "1=1", sql, flags=re.IGNORECASE)
+        print(f"[Generator] Removed current month strftime filter for rolling window")
+
+    # Clean up: remove 1=1 AND or AND 1=1
+    sql = re.sub(r'\s+AND\s+1=1\b', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\b1=1\s+AND\s+', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bWHERE\s+1=1\b', 'WHERE 1=1', sql, flags=re.IGNORECASE)
+
+    # If WHERE is now empty or just 1=1, clean it up
+    sql = re.sub(r'WHERE\s+1=1\s*$', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WHERE\s+1=1\s+ORDER', 'ORDER', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WHERE\s+1=1\s+GROUP', 'GROUP', sql, flags=re.IGNORECASE)
+
+    return sql
+
+
+def _fix_group_by(sql: str) -> str:
+    """Fix GROUP BY to include all non-aggregated selected columns."""
+    # Simple heuristic: if SELECT has date and GROUP BY doesn't, add it
+    select_match = re.search(r'SELECT\s+(.*?)\s+FROM', sql, re.IGNORECASE | re.DOTALL)
+    group_match = re.search(r'GROUP\s+BY\s+(.*?)(?:\s+ORDER|\s+LIMIT|$)', sql, re.IGNORECASE | re.DOTALL)
+
+    if not select_match or not group_match:
+        return sql
+
+    select_cols = [c.strip().split()[0] for c in select_match.group(1).split(',')]
+    group_cols = [c.strip() for c in group_match.group(1).split(',')]
+
+    # Check if 'date' is in SELECT but not in GROUP BY
+    if 'date' in select_cols and 'date' not in group_cols:
+        # Replace date with strftime expression in GROUP BY if needed
+        new_group = group_match.group(1) + ", date"
+        sql = sql.replace(group_match.group(0), f"GROUP BY{new_group}{group_match.group(0)[len('GROUP BY' + group_match.group(1)):]})")
+
+    return sql
+
+
+def _post_process_sql(sql: str, intent_data: Dict[str, Any], retry_hint: str, dialect: str = "sqlite", question_lower: str = "") -> str:
     """Apply deterministic fixes based on retry hints and intent."""
 
-    # Fix 1: Validate and fix column names
     sql = _validate_and_fix_columns(sql)
-
-    # Fix 1b: CRITICAL - Enforce ABS(amount) for debit queries
     sql = _enforce_abs_for_debits(sql, intent_data)
+    sql = _fix_date_filters(sql, question_lower)
+    sql = _fix_group_by(sql)
 
-    # Fix 2: Remove erroneous type filters based on retry hint
     if retry_hint and "Remove type" in retry_hint:
         original = sql
         sql = re.sub(r"\s*AND\s+type\s*=\s*['\"](debit|credit)['\"]", "", sql, flags=re.IGNORECASE)
@@ -417,7 +429,6 @@ def _post_process_sql(sql: str, intent_data: Dict[str, Any], retry_hint: str, di
         if sql != original:
             print(f"[Generator] Removed type filter based on retry_hint")
 
-    # Fix 3: If intent says no type filter, ensure none exists
     type_filter = intent_data.get("type_filter")
     if type_filter is None and "type =" in sql.lower():
         original = sql
@@ -427,16 +438,9 @@ def _post_process_sql(sql: str, intent_data: Dict[str, Any], retry_hint: str, di
         if sql != original:
             print(f"[Generator] Removed hallucinated type filter (intent.type_filter is null)")
 
-    # Fix 4: Dialect-specific fixes
-    if dialect == "sqlite":
-        # Ensure date comparisons use strftime, not direct string comparison for month ranges
-        pass  # Already handled by examples
-
-    # Fix 5: Ensure proper LIMIT
     if "LIMIT" not in sql.upper():
         sql = sql.rstrip(';') + " LIMIT 50"
 
-    # Clean up
     sql = re.sub(r'\s+', ' ', sql).strip()
     if sql.endswith(";"):
         sql = sql[:-1].strip()
@@ -454,16 +458,12 @@ async def generator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     dialect = state.get("dialect", "sqlite")
     date_examples = DIALECT_EXAMPLES.get(dialect, DIALECT_EXAMPLES["sqlite"])
 
-    # ============================================================================
-    # FIX: Load ACTUAL schema from database instead of hardcoded EXACT_SCHEMA
-    # ============================================================================
     try:
         exact_schema = await _load_schema_from_db()
     except Exception as e:
         print(f"[Generator] Failed to load schema from DB: {e}")
         exact_schema = "-- Schema unavailable --"
 
-    # Get sample data from database
     sample_data_parts = []
     try:
         schema = await db_manager.get_schema()
@@ -473,9 +473,7 @@ async def generator_node(state: Dict[str, Any]) -> Dict[str, Any]:
             if not table_name:
                 continue
             try:
-                sample = await db_manager.execute_readonly(
-                    f"SELECT * FROM {table_name} LIMIT 2"
-                )
+                sample = await db_manager.execute_readonly(f"SELECT * FROM {table_name} LIMIT 2")
                 rows = sample.get("rows", []) if isinstance(sample, dict) else []
                 if rows:
                     cols = list(rows[0].keys()) if rows else []
@@ -489,28 +487,10 @@ async def generator_node(state: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[Generator] Could not get schema: {e}")
 
     sample_data_text = "\n\n".join(sample_data_parts) if sample_data_parts else "No sample data available."
-
-    # Format sample data section
     sample_data_section = f"SAMPLE DATA FROM TABLES:\n{sample_data_text}" if sample_data_text else ""
 
     intent = state.get("intent", {})
-
-    # Detect rolling window from question
     question_lower = state["question"].lower()
-    time_dimension = intent.get("time_dimension", "")
-
-    # Map time dimension to correct date filter key
-    date_filter_key = "this_month"  # default
-    if "6 month" in question_lower or "six month" in question_lower or time_dimension == "last_6_months":
-        date_filter_key = "last_6_months"
-    elif "3 month" in question_lower or "three month" in question_lower or time_dimension == "last_3_months":
-        date_filter_key = "last_3_months"
-    elif "last month" in question_lower or time_dimension == "last_month":
-        date_filter_key = "last_month"
-    elif "last year" in question_lower or time_dimension == "last_year":
-        date_filter_key = "last_year"
-    elif "this month" in question_lower or time_dimension == "this_month":
-        date_filter_key = "this_month"
 
     prompt = ChatPromptTemplate.from_template(GENERATOR_PROMPT)
     chain = prompt | llm
@@ -548,8 +528,7 @@ async def generator_node(state: Dict[str, Any]) -> Dict[str, Any]:
     elif "```" in sql:
         sql = sql.split("```")[1].split("```")[0].strip()
 
-    # Post-process: fix columns, type filters, ABS enforcement, cleanup
-    sql = _post_process_sql(sql, intent, state.get("retry_hint", ""), dialect)
+    sql = _post_process_sql(sql, intent, state.get("retry_hint", ""), dialect, question_lower)
 
     return {
         **state,
