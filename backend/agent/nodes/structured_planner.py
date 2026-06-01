@@ -3,6 +3,7 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from typing import Dict, Any, List
 import json
+import re
 
 from config import get_settings
 from db.connection import db_manager
@@ -10,7 +11,6 @@ from cache.schema_rag import schema_rag
 
 settings = get_settings()
 
-# Dialect-specific date function templates
 DATE_TEMPLATES = {
     "sqlite": {
         "this_month": "strftime('%Y-%m', {{col}}) = strftime('%Y-%m', 'now')",
@@ -48,6 +48,17 @@ USER QUESTION: {question}
 DETECTED INTENT: {intent}
 
 DECOMPOSITION: {decomposition}
+
+=== CRITICAL AMOUNT SIGN CONVENTION ===
+The `amount` column uses SIGNED values:
+  - Debits (expenses, purchases, payments): NEGATIVE values
+  - Credits (income, salary, deposits): POSITIVE values
+
+THEREFORE:
+- For spending/expense aggregations: ALWAYS use SUM(ABS(amount)) or ABS(amount)
+- For income aggregations: Use SUM(amount) directly
+- For "highest expense": ORDER BY ABS(amount) DESC LIMIT 1 (NEVER MAX(amount))
+- NEVER use amount > 0 or amount < 0 as a filter — use type = 'debit' or type = 'credit'
 
 Output a JSON object with this EXACT structure:
 {{
@@ -106,6 +117,11 @@ CRITICAL RULES:
     - Example: "transactions.category" not just "category"
     - Example: "budgets.allocated" not just "allocated"
     - The validator will reject bare column names that exist in multiple tables
+19. AMOUNT SIGN CONVENTION (CRITICAL):
+    - Debits are NEGATIVE, Credits are POSITIVE
+    - For spending queries in select_columns: use "SUM(ABS(amount)) AS total_spent" NOT "SUM(amount)"
+    - For spending queries in order_by: use "ABS(amount) DESC" NOT "amount DESC"
+    - NEVER add "amount > 0" or "amount < 0" to where_filters
 
 JSON PLAN ONLY:"""
 
@@ -120,10 +136,8 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     dialect = state.get("dialect", "sqlite")
     date_templates = DATE_TEMPLATES.get(dialect, DATE_TEMPLATES["sqlite"])
 
-    # RAG: Get relevant tables based on intent
     full_schema = await db_manager.get_schema()
 
-    # Get actual table names from schema for portable detection
     table_names = [t["name"].lower() for t in full_schema.get("tables", [])]
     has_budgets = "budgets" in table_names
     has_accounts = "accounts" in table_names
@@ -132,31 +146,24 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     intent_data = state.get("intent", {})
     requires_join = intent_data.get("requires_join", False)
 
-    # === SCHEMA-AWARE MULTI-TABLE OVERRIDE ===
     question_lower = state["question"].lower()
 
-    # Force multi-table mode for budget queries (if budgets table exists)
     if has_budgets and any(word in question_lower for word in ["budget", "allocated", "over budget", "under budget", "budget vs", "budget limit"]):
         if not requires_join:
             print(f"[Planner] Schema override: budgets table exists + budget query detected. Forcing requires_join=True")
             intent_data["requires_join"] = True
             requires_join = True
 
-    # Force multi-table mode for account balance queries (if accounts table exists)
     if has_accounts and any(word in question_lower for word in ["account balance", "total balance", "highest balance", "balances"]):
         if not requires_join:
             print(f"[Planner] Schema override: accounts table exists + balance query detected. Forcing requires_join=True")
             intent_data["requires_join"] = True
             requires_join = True
 
-    # === CRITICAL FIX: NEVER force categories table join for simple category queries ===
-    # Category names like "Shopping", "Food", "Travel" are columns IN the transactions table.
-    # Only join with categories table if explicitly asking for metadata (color, icon, etc.)
     category_metadata_signals = ["color", "icon", "description", "category metadata", "category info"]
     needs_category_join = any(signal in question_lower for signal in category_metadata_signals)
 
     if has_categories and not needs_category_join:
-        # If the question only mentions a category name but not metadata, don't use categories table
         if any(cat in question_lower for cat in ["shopping", "food", "travel", "health", "entertainment", "groceries"]):
             print(f"[Planner] Category query detected without metadata request. Forcing single-table mode.")
             intent_data["requires_join"] = False
@@ -167,23 +174,17 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     relevant = schema_rag.retrieve_relevant(state["question"], top_k=top_k)
     schema_text = schema_rag.build_context(full_schema, relevant)
 
-    # Fetch sample data
     sample_data_parts = []
     for rel in relevant:
         try:
-            sample = await db_manager.execute_readonly(
-                f"SELECT * FROM {rel['name']} LIMIT 2"
-            )
+            sample = await db_manager.execute_readonly(f"SELECT * FROM {rel['name']} LIMIT 2")
             rows = sample.get("rows", [])
             if rows:
-                sample_data_parts.append(
-                    f"Table `{rel['name']}`:\\n" + "\\n".join([str(r) for r in rows])
-                )
+                sample_data_parts.append(f"Table `{rel['name']}`:\n" + "\n".join([str(r) for r in rows]))
         except Exception:
             pass
-    sample_data_text = "\\n\\n".join(sample_data_parts) if sample_data_parts else "No sample data."
+    sample_data_text = "\n\n".join(sample_data_parts) if sample_data_parts else "No sample data."
 
-    # Log
     stats = schema_rag.get_stats()
     print(f"SchemaRAG: {stats['tables_indexed']} tables, retrieved {len(relevant)} relevant")
     for r in relevant:
@@ -211,7 +212,6 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         plan = json.loads(content)
 
-        # Validate and set defaults
         plan.setdefault("tables", ["transactions"])
         plan.setdefault("joins", [])
         plan.setdefault("select_columns", ["*"])
@@ -222,23 +222,19 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
         plan.setdefault("aggregation", None)
         plan.setdefault("date_filter", None)
 
-        # === AGGRESSIVE SINGLE-TABLE ENFORCEMENT ===
         tables = plan.get("tables", [])
         if len(tables) == 1 and tables[0].lower() == "transactions":
             plan["joins"] = []
             print("[Planner] Single transactions table detected. Forcing empty joins.")
 
-        # === CRITICAL FIX: Remove categories table joins for simple category queries ===
         joins = plan.get("joins", [])
         cleaned_joins = []
         for join in joins:
             if join and join.get("right_table"):
                 right_table = join["right_table"].lower()
-                # Remove categories joins unless explicitly needed
                 if right_table == "categories" and not needs_category_join:
                     print(f"[Planner] REMOVING unnecessary categories table join: {join}")
                     continue
-                # Remove invalid joins
                 if join.get("on_condition"):
                     on_cond = join["on_condition"].lower()
                     if "categories.category" in on_cond or "category = category" in on_cond:
@@ -252,7 +248,6 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
         where_filters = plan.get("where_filters", [])
 
         if type_filter is None:
-            # Remove ANY type filter from where_filters
             cleaned_filters = []
             for f in where_filters:
                 if isinstance(f, str) and "type =" in f.lower():
@@ -261,11 +256,34 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 cleaned_filters.append(f)
             plan["where_filters"] = cleaned_filters
         elif type_filter == "debit":
-            # Ensure debit filter exists
             if not any("type = 'debit'" in f.lower() for f in where_filters if isinstance(f, str)):
                 plan["where_filters"].append("type = 'debit'")
+
+            # CRITICAL: Fix select_columns to use ABS(amount) for debit queries
+            select_cols = plan.get("select_columns", [])
+            fixed_select = []
+            for col in select_cols:
+                if isinstance(col, str):
+                    # Fix SUM(amount) -> SUM(ABS(amount))
+                    if re.search(r'(?i)SUM\s*\(\s*amount\s*\)', col):
+                        col = re.sub(r'(?i)SUM\s*\(\s*amount\s*\)', 'SUM(ABS(amount))', col)
+                        print(f"[Planner] Fixed select_column: SUM(amount) -> SUM(ABS(amount))")
+                    fixed_select.append(col)
+                else:
+                    fixed_select.append(col)
+            plan["select_columns"] = fixed_select
+
+            # Fix order_by for debit queries
+            order_by = plan.get("order_by", "")
+            if isinstance(order_by, str):
+                if re.search(r'(?i)^amount\s+desc$', order_by.strip()):
+                    plan["order_by"] = "ABS(amount) DESC"
+                    print(f"[Planner] Fixed order_by: amount DESC -> ABS(amount) DESC")
+                elif re.search(r'(?i)^amount\s+asc$', order_by.strip()):
+                    plan["order_by"] = "ABS(amount) ASC"
+                    print(f"[Planner] Fixed order_by: amount ASC -> ABS(amount) ASC")
+
         elif type_filter == "credit":
-            # Ensure credit filter exists
             if not any("type = 'credit'" in f.lower() for f in where_filters if isinstance(f, str)):
                 plan["where_filters"].append("type = 'credit'")
 

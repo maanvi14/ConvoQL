@@ -930,14 +930,14 @@ export default function LandingPage() {
                 desc: "After intent classification, a deterministic rule layer checks the question against explicit signal sets and overrides incorrect type_filter values. The most common hallucination class is eliminated before it reaches the planner.",
               },
               {
-                tag: "AI",
+                tag: "INFRASTRUCTURE",
                 tagStyle: {
-                  backgroundColor: "rgba(45,212,191,0.08)",
-                  color: "#2dd4bf",
-                  borderColor: "rgba(45,212,191,0.15)",
+                  backgroundColor: "rgba(14,165,233,0.08)",
+                  color: "#0ea5e9",
+                  borderColor: "rgba(14,165,233,0.15)",
                 },
-                title: "Post-execution analytics",
-                desc: "After every query, numeric columns are checked with z-score anomaly detection and results are analyzed for period-over-period change. Both run unconditionally on every result set — no extra prompt needed.",
+                title: "Containerized backend deployment",
+                desc: "The FastAPI backend is fully Dockerized and deployed on Hugging Face Spaces. A single Dockerfile handles dependency installation, server startup via Uvicorn, and port binding — making the backend portable and reproducible across environments.",
               },
               {
                 tag: "RELIABILITY",
@@ -1014,6 +1014,9 @@ export default function LandingPage() {
               { name: "Groq · LLaMA 3", color: "#0ea5e9" },
               { name: "SQLAlchemy", color: "#64748b" },
               { name: "Python asyncio", color: "#a78bfa" },
+              { name: "Docker", color: "#2496ed" },
+              { name: "Hugging Face Spaces", color: "#ffbd59" },
+              { name: "Vercel", color: "#ffffff" },
             ].map((tech, i) => (
               <div
                 key={i}
@@ -1152,3 +1155,4 @@ export default function LandingPage() {
     </>
   );
 }
+

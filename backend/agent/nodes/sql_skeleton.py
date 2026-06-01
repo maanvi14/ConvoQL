@@ -4,7 +4,6 @@ import re
 
 from db.connection import db_manager
 
-# Dialect-specific date functions for entity linking
 DATE_FUNCTIONS = {
     "sqlite": {
         "this_month": "strftime('%Y-%m', {col}) = strftime('%Y-%m', 'now')",
@@ -26,7 +25,6 @@ DATE_FUNCTIONS = {
     }
 }
 
-# Column name mapping for common hallucinations
 COLUMN_ALIASES = {
     "id": "transaction_id",
     "trans_id": "transaction_id",
@@ -39,11 +37,9 @@ COLUMN_ALIASES = {
     "expense": "amount",
 }
 
-# Schema cache for validation
 _schema_cache = None
 
 async def _get_schema_columns() -> Dict[str, List[str]]:
-    """Get actual columns from schema for validation."""
     global _schema_cache
     if _schema_cache is None:
         schema = await db_manager.get_schema()
@@ -55,32 +51,26 @@ async def _get_schema_columns() -> Dict[str, List[str]]:
 
 
 def _fix_hallucinated_columns(sql: str) -> str:
-    """Fix common column hallucinations in generated SQL."""
-    # Fix 1: id -> transaction_id
     for bad_col, good_col in COLUMN_ALIASES.items():
         pattern = r'(?<![\w.])' + re.escape(bad_col) + r'(?![\w])'
         if re.search(pattern, sql, re.IGNORECASE):
             sql = re.sub(pattern, good_col, sql, flags=re.IGNORECASE)
 
-    # Fix 2: tags.name, tags.value -> tags (remove JSON notation)
     sql = re.sub(r'\btags\.name\b', 'tags', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\btags\.value\b', 'tags', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\btags\[[^\]]+\]', 'tags', sql, flags=re.IGNORECASE)
 
-    # Fix 3: WHERE tags = 'x' -> WHERE tags LIKE '%x%'
     sql = re.sub(
         r"(?i)WHERE\s+(\w+)\s*=\s*['\"]([^'\"]+)['\"]",
         lambda m: f"WHERE {m.group(1)} LIKE '%{m.group(2)}%'" if m.group(1).lower() == 'tags' else m.group(0),
         sql
     )
-    # Also fix AND tags = 'x'
     sql = re.sub(
         r"(?i)AND\s+(\w+)\s*=\s*['\"]([^'\"]+)['\"]",
         lambda m: f"AND {m.group(1)} LIKE '%{m.group(2)}%'" if m.group(1).lower() == 'tags' else m.group(0),
         sql
     )
 
-    # Fix 4: Remove double commas and fix spacing
     sql = re.sub(r',\s*,', ',', sql)
     sql = re.sub(r'SELECT\s+,', 'SELECT ', sql, flags=re.IGNORECASE)
     sql = re.sub(r',\s+FROM', ' FROM', sql, flags=re.IGNORECASE)
@@ -88,10 +78,27 @@ def _fix_hallucinated_columns(sql: str) -> str:
     return sql
 
 
+def _enforce_abs_for_debits(sql: str, intent: Dict[str, Any]) -> str:
+    """CRITICAL: Ensure ABS(amount) is used for debit/spending queries in skeleton SQL."""
+    type_filter = intent.get("type_filter") if intent else None
+    sql_lower = sql.lower()
+
+    is_debit_query = (type_filter == "debit" or 
+                      "type = 'debit'" in sql_lower or 
+                      "type=\"debit\"" in sql_lower)
+
+    if is_debit_query:
+        sql = re.sub(r'(?i)SUM\s*\(\s*amount\s*\)', 'SUM(ABS(amount))', sql)
+        sql = re.sub(r'(?i)ORDER\s+BY\s+amount\s+DESC', 'ORDER BY ABS(amount) DESC', sql)
+        sql = re.sub(r'(?i)ORDER\s+BY\s+amount\s+ASC', 'ORDER BY ABS(amount) ASC', sql)
+        sql = re.sub(r'(?i)MAX\s*\(\s*amount\s*\)', 'MAX(ABS(amount))', sql)
+        sql = re.sub(r'(?i)AVG\s*\(\s*amount\s*\)', 'AVG(ABS(amount))', sql)
+
+    return sql
+
+
 def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any], 
                         intent: Dict[str, Any], dialect: str = "sqlite") -> str:
-    """Build SQL query from structured plan. Deterministic, not LLM-based."""
-
     tables = plan.get("tables", ["transactions"])
     joins = plan.get("joins", [])
     select_cols = plan.get("select_columns", ["*"])
@@ -102,17 +109,12 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
 
     date_funcs = DATE_FUNCTIONS.get(dialect, DATE_FUNCTIONS["sqlite"])
 
-    # FORCE SINGLE TABLE: If only transactions table, ignore all joins
     if len(tables) == 1 and tables[0].lower() == "transactions":
         joins = []
 
-    # Build SELECT
     select_clause = ", ".join(select_cols)
-
-    # Build FROM
     from_clause = tables[0]
 
-    # Build JOINs (only if multiple tables)
     join_clauses = []
     if len(tables) > 1:
         for join in joins:
@@ -128,20 +130,16 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
                 else:
                     join_clauses.append(f"{join_type} {right_table}")
 
-    # Build WHERE
     all_filters = list(where_filters)
 
-    # Add type filter from intent if present and not already in filters
     type_filter = intent.get("type_filter") if intent else None
     if type_filter:
         type_filter_sql = f"type = '{type_filter}'"
         if not any(type_filter_sql.lower() in f.lower() for f in all_filters if isinstance(f, str)):
             all_filters.append(type_filter_sql)
     elif type_filter is None:
-        # Explicitly remove any type filters if intent says null
         all_filters = [f for f in all_filters if not (isinstance(f, str) and "type =" in f.lower())]
 
-    # Add entity-based filters from linked values
     for value_link in entity_links.get("linked_values", []):
         if isinstance(value_link, dict):
             vtype = value_link.get("type", "")
@@ -159,14 +157,12 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
                 elif vtype == "payment_method":
                     all_filters.append(f"payment_method = '{vvalue}'")
                 elif vtype == "tag":
-                    # CRITICAL: tags is comma-separated, use LIKE
                     all_filters.append(f"tags LIKE '%{vvalue}%'")
                 elif voperator == "LIKE":
                     all_filters.append(f"{vcolumn} LIKE '%{vvalue}%'")
                 else:
                     all_filters.append(f"{vcolumn} = '{vvalue}'")
 
-    # Add entity-based date filters
     for date_ref in entity_links.get("linked_dates", []):
         dtype = date_ref["type"]
         if dtype in date_funcs:
@@ -176,7 +172,6 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
         elif dtype == "last_year":
             all_filters.append(date_funcs["last_year"].format(col="date"))
 
-    # DEDUPLICATE filters
     seen_filters = set()
     unique_filters = []
     for f in all_filters:
@@ -189,14 +184,9 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
             unique_filters.append(f)
 
     where_clause = " AND ".join(unique_filters) if unique_filters else "1=1"
-
-    # Build GROUP BY
     group_clause = ", ".join(group_by) if group_by else ""
-
-    # Build ORDER BY
     order_clause = order_by if order_by else ""
 
-    # Assemble SQL
     sql = f"SELECT {select_clause}\nFROM {from_clause}"
 
     for join_clause in join_clauses:
@@ -217,28 +207,23 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
 
 
 async def sql_skeleton_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate SQL using structured plan + entity links + intent + dialect."""
     plan = state.get("structured_plan", {})
     entity_links = state.get("entity_links", {})
     intent = state.get("intent", {})
     dialect = state.get("dialect", "sqlite")
 
-    # Build SQL deterministically
     sql = build_sql_from_plan(plan, entity_links, intent, dialect)
 
-    # Validate basic structure
     sql_upper = sql.upper()
     if "SELECT" not in sql_upper:
         sql = "SELECT * FROM transactions LIMIT 50"
 
-    # Apply hallucination fixes
     sql = _fix_hallucinated_columns(sql)
+    sql = _enforce_abs_for_debits(sql, intent)
 
-    # Ensure LIMIT exists
     if "LIMIT" not in sql.upper():
         sql = sql.rstrip(';') + "\nLIMIT 50"
 
-    # Clean up whitespace
     sql = re.sub(r'\s+', ' ', sql).strip()
     if sql.endswith(";"):
         sql = sql[:-1].strip()

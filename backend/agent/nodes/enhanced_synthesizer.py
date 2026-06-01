@@ -52,6 +52,8 @@ RULES:
 - NEVER make up data. Use exact values from results.
 - Use ₹ for INR amounts.
 - No follow-up questions. No "Key Insight". No "Details". Just plain English.
+- IMPORTANT: Debits (expenses) have NEGATIVE amounts in the database. When displaying spending, show the absolute value with ₹.
+- IMPORTANT: Credits (income) have POSITIVE amounts. Display as-is.
 
 JSON Response ONLY:"""
 
@@ -60,7 +62,6 @@ def _extract_json(content: str) -> Optional[Dict[str, Any]]:
     """Robustly extract JSON from LLM response."""
     content = content.strip()
 
-    # Try to find JSON block
     patterns = [
         r'```json\s*(.*?)\s*```',
         r'```\s*(\{.*?\})\s*```',
@@ -75,7 +76,6 @@ def _extract_json(content: str) -> Optional[Dict[str, Any]]:
             except json.JSONDecodeError:
                 continue
 
-    # Try the whole content
     try:
         return json.loads(content)
     except json.JSONDecodeError:
@@ -90,7 +90,6 @@ def _build_fallback_answer(result: Dict[str, Any], question: str, chart_type: Op
     columns = result.get("columns", [])
     total_rows = len(rows)
 
-    # Determine if chart-worthy
     has_multiple_rows = total_rows > 1
     has_numeric = any(
         any(isinstance(row.get(c), (int, float)) for row in rows[:3])
@@ -103,6 +102,16 @@ def _build_fallback_answer(result: Dict[str, Any], question: str, chart_type: Op
 
     should_chart = has_multiple_rows and has_numeric and has_categorical
 
+    # Detect query context
+    question_lower = question.lower()
+    is_spending_query = any(w in question_lower for w in [
+        "spend", "spent", "expense", "expenses", "debit", "purchase", "purchased",
+        "bought", "payment", "paid", "cost", "price", "fee", "bill"
+    ])
+    is_income_query = any(w in question_lower for w in [
+        "income", "salary", "credit", "earned", "received", "deposit"
+    ])
+
     # Build simple answer
     if total_rows == 0:
         answer = "I couldn't find any data matching your query."
@@ -110,8 +119,22 @@ def _build_fallback_answer(result: Dict[str, Any], question: str, chart_type: Op
         row = rows[0]
         parts = []
         for k, v in row.items():
+            key_lower = k.lower()
+            is_amount_col = any(w in key_lower for w in ["amount", "spent", "total", "sum", "expense", "income", "value"])
+
             if isinstance(v, (int, float)):
-                parts.append(f"{k.replace('_', ' ')} is ₹{v:,.2f}")
+                if is_amount_col:
+                    if is_spending_query or ("debit" in key_lower or "spent" in key_lower or "expense" in key_lower):
+                        # Spending should be shown as positive
+                        parts.append(f"{k.replace('_', ' ')} is ₹{abs(v):,.2f}")
+                    elif is_income_query or "income" in key_lower or "credit" in key_lower:
+                        parts.append(f"{k.replace('_', ' ')} is ₹{v:,.2f}")
+                    else:
+                        # Ambiguous - show absolute for safety if value is negative
+                        display_val = abs(v) if v < 0 else v
+                        parts.append(f"{k.replace('_', ' ')} is ₹{display_val:,.2f}")
+                else:
+                    parts.append(f"{k.replace('_', ' ')} is {v}")
             else:
                 parts.append(f"{k.replace('_', ' ')} is {v}")
         answer = f"Here's what I found: {', '.join(parts[:3])}."
@@ -120,7 +143,6 @@ def _build_fallback_answer(result: Dict[str, Any], question: str, chart_type: Op
         answer = f"I found {total_rows} results. "
         if rows:
             first = rows[0]
-            # Try to find name and value columns
             name_col = None
             val_col = None
             for c in columns:
@@ -132,7 +154,9 @@ def _build_fallback_answer(result: Dict[str, Any], question: str, chart_type: Op
             if name_col and val_col and name_col in first and val_col in first:
                 try:
                     val = float(first[val_col])
-                    answer += f"Top result: {first[name_col]} at ₹{val:,.2f}."
+                    # For spending queries, show absolute value
+                    display_val = abs(val) if is_spending_query else val
+                    answer += f"Top result: {first[name_col]} at ₹{display_val:,.2f}."
                 except (ValueError, TypeError):
                     answer += f"Top result: {first[name_col]}."
 
@@ -172,9 +196,21 @@ async def enhanced_synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         state["result"] = None
         return state
 
-    # Analytics
-    anomaly = detect_anomalies(result)
-    chart_type = classify_chart_type(result)
+    # Determine analysis context from question
+    question_lower = state["question"].lower()
+    is_spending_query = any(w in question_lower for w in [
+        "spend", "spent", "expense", "expenses", "debit", "purchase", "purchased",
+        "bought", "payment", "paid", "cost", "price", "fee", "bill"
+    ])
+    is_income_query = any(w in question_lower for w in [
+        "income", "salary", "credit", "earned", "received", "deposit"
+    ])
+
+    analysis_context = "spending" if is_spending_query else ("income" if is_income_query else "all")
+
+    # Pass context to anomaly detector and chart classifier
+    anomaly = detect_anomalies(result, context=analysis_context)
+    chart_type = classify_chart_type(result, context=analysis_context)
 
     rows = result.get("rows", [])
     columns = result.get("columns", [])
@@ -197,7 +233,6 @@ async def enhanced_synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     content = response.content.strip()
 
-    # Extract JSON from response
     parsed = _extract_json(content)
 
     if parsed:
@@ -208,7 +243,6 @@ async def enhanced_synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         state["has_table"] = parsed.get("has_table", total_rows > 0)
         state["insight"] = parsed.get("insight")
     else:
-        # Fallback: use raw content as answer or build structured response
         fallback = _build_fallback_answer(result, state["question"], chart_type)
         state["answer"] = content.replace("**", "").replace("*", "").replace("#", "").strip() or fallback["answer"]
         state["has_chart"] = fallback["has_chart"]
@@ -217,24 +251,20 @@ async def enhanced_synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         state["has_table"] = fallback["has_table"]
         state["insight"] = fallback["insight"]
 
-    # Ensure consistency: if chart_type is set but has_chart is false, fix it
     if state.get("chart_type") and not state.get("has_chart"):
         state["has_chart"] = True
 
-    # Ensure chart_type matches data
     if state.get("has_chart") and not state.get("chart_type"):
         state["chart_type"] = chart_type or "bar"
 
-    # Set chart title if missing
     if state.get("has_chart") and not state.get("chart_title"):
         state["chart_title"] = state["question"][:50]
 
-    state["explanation"] = state["answer"]  # For backward compatibility
-    state["follow_ups"] = []  # No follow-ups in chat
+    state["explanation"] = state["answer"]
+    state["follow_ups"] = []
     state["anomaly"] = anomaly
     state["chart_type"] = state.get("chart_type") or chart_type
 
-    # CRITICAL: Pass result through for frontend rendering
     state["result"] = result
     state["sql"] = state["generated_sql"]
     state["execution_time_ms"] = result.get("executionTime", 0)
