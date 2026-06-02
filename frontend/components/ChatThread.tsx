@@ -140,12 +140,12 @@ export default function ChatThread({
   };
 
   const QUICK_CHIPS = [
-    "Highest expense last month",
-    "Weekly spending trend",
-    "Account balances",
-    "Month comparison",
-    "Spending by category",
-    "Average daily spend",
+    "Show all transactions from uber",
+    "Show all transactions tagged with 'Subscription'",
+    "Which category has the highest spending?",
+    "Show me total spending by payment method",
+    "Account Balances",
+    "Show me top 3 Categories by spending",
   ];
 
   return (
