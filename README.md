@@ -31,10 +31,12 @@ Powered by LangGraph, LangChain, Groq LLaMA 3, and FastAPI, the system employs s
 ---
 ## 🚀 Live Workflow
 
-🔗 **Frontend:**  https://convo-ql.vercel.app/<img width="1800" height="1960" alt="ConvoQL_Architecture" src="https://github.com/user-attachments/assets/3f01a822-1ae3-4d4b-b99d-5fad8c813828" />
+🔗 **Frontend:**  https://convo-ql.vercel.app/
 
 🔗 **Backend:**   https://huggingface.co/spaces/Maanviiii/ConvoQL-backend
 ---
+<img width="1800" height="1960" alt="ConvoQL_Architecture" src="https://github.com/user-attachments/assets/3f01a822-1ae3-4d4b-b99d-5fad8c813828" />
+
 ## Key Engineering Features
 
 ### Agentic LangGraph Workflow
@@ -101,8 +103,6 @@ ConvoQL supports SQLite, MySQL, and PostgreSQL through a unified database abstra
 | Containerization | Docker |
 | Frontend Deployment | Vercel |
 | Backend Deployment | Hugging Face Spaces, Render |
-
-<img width="1800" height="1960" alt="ConvoQL_Architecture" src="https://github.com/user-attachments/assets/73a29a35-ced7-4a12-ae43-f07bf02c1b16" />
 
 ---
 
