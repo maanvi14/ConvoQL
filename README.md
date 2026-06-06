@@ -31,9 +31,7 @@ Powered by LangGraph, LangChain, Groq LLaMA 3, and FastAPI, the system employs s
 ---
 ## 🚀 Live Workflow
 
-🔗 **Frontend:**  https://convo-ql.vercel.app/
-
-🔗 **Backend:**   https://huggingface.co/spaces/Maanviiii/ConvoQL-backend
+🔗 *Frontend:*  https://convo-ql.vercel.app/ | 🔗 *Backend:*   https://huggingface.co/spaces/Maanviiii/ConvoQL-backend
 ---
 <img width="1800" height="1960" alt="ConvoQL_Architecture" src="https://github.com/user-attachments/assets/3f01a822-1ae3-4d4b-b99d-5fad8c813828" />
 
