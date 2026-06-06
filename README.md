@@ -32,6 +32,7 @@ Powered by LangGraph, LangChain, Groq LLaMA 3, and FastAPI, the system employs s
 ## 🚀 Live Workflow
 
 🔗 **Frontend :** https://convo-ql.vercel.app/
+
 🔗 **Backend :** https://huggingface.co/spaces/Maanviiii/ConvoQL-backend
 ---
 ## Key Engineering Features
@@ -102,71 +103,6 @@ ConvoQL supports SQLite, MySQL, and PostgreSQL through a unified database abstra
 | Backend Deployment | Hugging Face Spaces, Render |
 
 ---
-⚙️ Setup Instructions
-1. Clone the Repository
-git clone https://github.com/maanvi14/ConvoQL.git
-cd ConvoQL
-2. Backend Setup
-
-Create and activate a virtual environment:
-
-python -m venv venv
-
-Windows
-
-venv\Scripts\activate
-
-Mac/Linux
-
-source venv/bin/activate
-
-Install backend dependencies:
-
-pip install -r backend/requirements.txt
-
-Start the FastAPI backend:
-
-python backend/main.py
-3. Frontend Setup
-
-Navigate to the frontend directory:
-
-cd frontend
-
-Install dependencies:
-
-npm install
-
-Start the development server:
-
-npm run dev
-4. Access the Application
-
-Frontend:
-
-http://localhost:3000
-
-Backend:
-
-http://localhost:8000
-5. Docker Setup (Optional)
-
-Build the Docker image:
-
-docker build -t convoql .
-
-Run the container:
-
-docker run -p 8000:8000 convoql
-Supported Databases
-
-ConvoQL supports multiple SQL databases through a unified connection layer:
-
-SQLite
-MySQL
-PostgreSQL
-
-Simply connect your database, and ConvoQL will automatically discover the schema and enable natural language querying.
 
 
 title: ConvoQL
