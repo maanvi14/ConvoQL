@@ -85,13 +85,17 @@ export default function ChatThread({
         rowCount: data.row_count || (data.rows?.length || 0),
       };
 
+      // === CRITICAL FIX: Auto-detect chart type from result data ===
+      const detectedChartType = detectChartType(resultData, input);
+      const shouldShowChart = detectedChartType !== "table" && resultData.rows && resultData.rows.length > 0;
+
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
         content: data.answer || data.explanation || "Here's what I found:",
         sql: data.sql || data.generated_sql,
-        hasChart: !!(data.has_chart || data.chart_type || (data.chartType && data.chartType !== "table")),
-        chartType: (data.chart_type || data.chartType) as ChartType,
+        hasChart: data.has_chart || data.chart_type || shouldShowChart,
+        chartType: (data.chart_type || data.chartType || detectedChartType) as ChartType,
         chartTitle: data.chart_title || data.chartTitle || input,
         hasTable: data.has_table || (resultData.rows?.length > 0 && resultData.rows?.length <= 50),
         result: resultData,
@@ -127,6 +131,54 @@ export default function ChatThread({
     }
   };
 
+  // === CRITICAL FIX: Auto-detect chart type from data shape ===
+  function detectChartType(result: any, question: string): ChartType {
+    if (!result || !result.rows || result.rows.length === 0) return "table";
+
+    const rows = result.rows;
+    const columns = result.columns || [];
+    const q = question.toLowerCase();
+
+    // Find numeric columns
+    const numericCols = columns.filter((c: string) => {
+      const val = rows[0]?.[c];
+      return typeof val === "number" || (typeof val === "string" && !isNaN(Number(val)) && val !== "");
+    });
+
+    // Find date columns
+    const dateCol = columns.find((c: string) => {
+      const val = rows[0]?.[c];
+      if (typeof val !== "string") return false;
+      const cl = c.toLowerCase();
+      return cl.includes("date") || cl.includes("month") || cl.includes("year") || !isNaN(new Date(val).getTime());
+    });
+
+    // Find label columns (non-numeric, non-date)
+    const labelCols = columns.filter((c: string) => !numericCols.includes(c) && c !== dateCol);
+
+    // Time series -> line chart
+    if (dateCol && numericCols.length > 0 && rows.length >= 3) {
+      return "line";
+    }
+
+    // Few categories with values -> pie chart
+    if (labelCols.length > 0 && numericCols.length > 0 && rows.length <= 6) {
+      return "pie";
+    }
+
+    // Multiple categories with values -> bar chart
+    if (labelCols.length > 0 && numericCols.length > 0) {
+      return "bar";
+    }
+
+    // Budget comparison queries -> bar chart
+    if (q.includes("budget") && numericCols.length >= 2) {
+      return "bar";
+    }
+
+    return "table";
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -140,12 +192,12 @@ export default function ChatThread({
   };
 
   const QUICK_CHIPS = [
-    "Show all transactions from uber",
-    "Show all transactions tagged with 'Subscription'",
+    "Compare my budget VS actual spending for May",
+    "Show me top 3 Categories by spending",
+    "Show all transactions from 'Uber'",
     "Which category has the highest spending?",
     "Show me total spending by payment method",
     "Account Balances",
-    "Show me top 3 Categories by spending",
   ];
 
   return (

@@ -147,6 +147,18 @@ CRITICAL RULES:
     - For "this month": use {date_this_month} (single month)
     - For "last year": use {date_last_year} (rolling window)
     - NEVER use this_month for "last 6 months" — that would only show current month!
+21. LISTING QUERY RULE (CRITICAL - READ CAREFULLY):
+    - For "Show all transactions tagged with 'Subscription'": select_columns = ["*"], group_by = [], NO type filter
+    - For "Show all transactions from uber": select_columns = ["*"], group_by = [], where_filters = ["merchant = 'uber'"]
+    - For "Show all transactions": select_columns = ["*"], group_by = [], where_filters = []
+    - LISTING queries (show all, show me, find all, list all, get all) should NEVER have GROUP BY
+    - group_by MUST be [] for any query that just lists/shows transactions
+    - group_by MUST ONLY contain actual column names, NEVER "*"
+22. AGGREGATION QUERY RULE:
+    - Only use GROUP BY when the query asks for totals, sums, averages, counts, or comparisons
+    - "Show me total spending by category" -> group_by = ["category"]
+    - "Which category has highest spending" -> group_by = ["category"]
+    - "Show all transactions" -> group_by = []
 
 JSON PLAN ONLY:"""
 
@@ -176,6 +188,11 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # === SCHEMA-AWARE MULTI-TABLE OVERRIDE ===
     question_lower = state["question"].lower()
 
+    # Detect if this is a simple listing query (no aggregation needed)
+    is_listing_query = any(w in question_lower for w in ["show all", "show me all", "find all", "list all", "get all", "all transactions"])
+    is_tag_query = any(w in question_lower for w in ["tag", "tagged", "subscription", "label"])
+    is_merchant_query = any(w in question_lower for w in ["from uber", "from amazon", "merchant"])
+
     # Force multi-table mode for budget queries (if budgets table exists)
     if has_budgets and any(word in question_lower for word in ["budget", "allocated", "over budget", "under budget", "budget vs", "budget limit"]):
         if not requires_join:
@@ -191,13 +208,10 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
             requires_join = True
 
     # === CRITICAL FIX: NEVER force categories table join for simple category queries ===
-    # Category names like "Shopping", "Food", "Travel" are columns IN the transactions table.
-    # Only join with categories table if explicitly asking for metadata (color, icon, etc.)
     category_metadata_signals = ["color", "icon", "description", "category metadata", "category info"]
     needs_category_join = any(signal in question_lower for signal in category_metadata_signals)
 
     if has_categories and not needs_category_join:
-        # If the question only mentions a category name but not metadata, don't use categories table
         if any(cat in question_lower for cat in ["shopping", "food", "travel", "health", "entertainment", "groceries"]):
             print(f"[Planner] Category query detected without metadata request. Forcing single-table mode.")
             intent_data["requires_join"] = False
@@ -233,8 +247,7 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Detect rolling window from question for correct date template
     time_dimension = intent_data.get("time_dimension", "")
 
-    # Map question to correct date filter template
-    date_filter_template = "this_month"  # default
+    date_filter_template = "this_month"
     if "6 month" in question_lower or "six month" in question_lower or time_dimension == "last_6_months":
         date_filter_template = "last_6_months"
     elif "3 month" in question_lower or "three month" in question_lower or time_dimension == "last_3_months":
@@ -247,6 +260,7 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
         date_filter_template = "this_month"
 
     print(f"[Planner] Detected date filter template: {date_filter_template}")
+    print(f"[Planner] Query type: listing={is_listing_query}, tag={is_tag_query}, merchant={is_merchant_query}")
 
     prompt = ChatPromptTemplate.from_template(PLANNER_PROMPT)
     chain = prompt | llm
@@ -285,6 +299,25 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
         plan.setdefault("aggregation", None)
         plan.setdefault("date_filter", None)
 
+        # === CRITICAL FIX: Force empty group_by for listing/tag/merchant queries ===
+        if is_listing_query or is_tag_query or is_merchant_query:
+            if plan.get("group_by"):
+                print(f"[Planner] Forcing empty group_by for listing/tag/merchant query")
+                plan["group_by"] = []
+            # Ensure select_columns is ["*"] for raw listings
+            if not any(agg in str(plan.get("select_columns", [])).lower() for agg in ["sum", "count", "avg", "max", "min"]):
+                plan["select_columns"] = ["*"]
+
+        # === CRITICAL FIX: Sanitize group_by - NEVER allow "*" ===
+        group_by = plan.get("group_by", [])
+        sanitized_group_by = []
+        for g in group_by:
+            if isinstance(g, str) and g.strip() == "*":
+                print(f"[Planner] REMOVING invalid '*' from group_by")
+                continue
+            sanitized_group_by.append(g)
+        plan["group_by"] = sanitized_group_by
+
         # === AGGRESSIVE SINGLE-TABLE ENFORCEMENT ===
         tables = plan.get("tables", [])
         if len(tables) == 1 and tables[0].lower() == "transactions":
@@ -297,11 +330,9 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
         for join in joins:
             if join and join.get("right_table"):
                 right_table = join["right_table"].lower()
-                # Remove categories joins unless explicitly needed
                 if right_table == "categories" and not needs_category_join:
                     print(f"[Planner] REMOVING unnecessary categories table join: {join}")
                     continue
-                # Remove invalid joins
                 if join.get("on_condition"):
                     on_cond = join["on_condition"].lower()
                     if "categories.category" in on_cond or "category = category" in on_cond:
@@ -314,26 +345,23 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
         type_filter = intent_data.get("type_filter")
         where_filters = plan.get("where_filters", [])
 
-        if type_filter is None:
-            # Remove ANY type filter from where_filters
+        if type_filter is None or is_tag_query or is_listing_query or is_merchant_query:
+            # Remove ANY type filter for tag/merchant/listing searches or when type_filter is null
             cleaned_filters = []
             for f in where_filters:
                 if isinstance(f, str) and "type =" in f.lower():
-                    print(f"[Planner] Removing type filter '{f}' because intent.type_filter is null")
+                    print(f"[Planner] Removing type filter '{f}' because intent.type_filter is null or query is listing/tag/merchant")
                     continue
                 cleaned_filters.append(f)
             plan["where_filters"] = cleaned_filters
         elif type_filter == "debit":
-            # Ensure debit filter exists
             if not any("type = 'debit'" in f.lower() for f in where_filters if isinstance(f, str)):
                 plan["where_filters"].append("type = 'debit'")
 
-            # CRITICAL: Also ensure select_columns use ABS(amount) for spending
             select_cols = plan.get("select_columns", [])
             fixed_select = []
             for col in select_cols:
                 if isinstance(col, str):
-                    # Fix SUM(amount) -> SUM(ABS(amount)) for debit queries
                     if re.search(r'(?i)SUM\s*\(\s*amount\s*\)', col):
                         col = re.sub(r'(?i)SUM\s*\(\s*amount\s*\)', 'SUM(ABS(amount))', col)
                         print(f"[Planner] Fixed select_column: SUM(amount) -> SUM(ABS(amount))")
@@ -342,21 +370,17 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     fixed_select.append(col)
             plan["select_columns"] = fixed_select
 
-            # Fix order_by for debit queries
             order_by = plan.get("order_by", "")
             if isinstance(order_by, str) and re.search(r'(?i)^amount\s+desc$', order_by.strip()):
                 plan["order_by"] = "ABS(amount) DESC"
                 print(f"[Planner] Fixed order_by: amount DESC -> ABS(amount) DESC")
 
         elif type_filter == "credit":
-            # Ensure credit filter exists
             if not any("type = 'credit'" in f.lower() for f in where_filters if isinstance(f, str)):
                 plan["where_filters"].append("type = 'credit'")
 
         # === DATE FILTER ENFORCEMENT ===
-        # If the question asks for rolling window but plan has single month, fix it
         if date_filter_template in ["last_6_months", "last_3_months", "last_year"]:
-            # Check if where_filters contains a single-month filter when it should be rolling
             has_rolling = False
             for f in where_filters:
                 if isinstance(f, str) and (">=" in f or "date('now'" in f or "DATE_SUB" in f or "INTERVAL" in f):
@@ -364,7 +388,6 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     break
 
             if not has_rolling:
-                # Remove any single-month strftime equality filters
                 cleaned_filters = []
                 for f in where_filters:
                     if isinstance(f, str) and ("strftime('%Y-%m'" in f and "= strftime('%Y-%m', 'now')" in f):
@@ -372,7 +395,6 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
                         continue
                     cleaned_filters.append(f)
 
-                # Add the correct rolling window filter
                 rolling_filter = date_templates[date_filter_template].replace("{{col}}", "date")
                 cleaned_filters.append(rolling_filter)
                 plan["where_filters"] = cleaned_filters

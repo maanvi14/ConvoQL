@@ -39,6 +39,32 @@ interface SQLPanelProps {
   onClose?: () => void;
 }
 
+// === PARSE TABLES FROM SQL DYNAMICALLY ===
+function parseTablesFromSql(sql: string): string[] {
+  if (!sql) return [];
+  const tables: string[] = [];
+  const seen = new Set<string>();
+
+  // Match FROM table
+  const fromMatch = sql.match(/FROM\s+(\w+)/i);
+  if (fromMatch) {
+    tables.push(fromMatch[1]);
+    seen.add(fromMatch[1].toLowerCase());
+  }
+
+  // Match JOIN tables
+  const joinMatches = sql.matchAll(/JOIN\s+(\w+)/gi);
+  for (const match of joinMatches) {
+    const table = match[1];
+    if (!seen.has(table.toLowerCase())) {
+      tables.push(table);
+      seen.add(table.toLowerCase());
+    }
+  }
+
+  return tables;
+}
+
 export default function SQLPanel({
   sql,
   result,
@@ -55,6 +81,9 @@ export default function SQLPanel({
   const rowCount = result?.rowCount || result?.rows?.length || 0;
   const totalRows = result?.totalRows || rowCount;
   const execTime = executionTime || result?.executionTime || 0;
+
+  // Parse tables dynamically from SQL
+  const tableReferences = parseTablesFromSql(sql || "");
 
   const tabs: { id: TabType; label: string }[] = [
     { id: "sql", label: "SQL" },
@@ -396,7 +425,7 @@ export default function SQLPanel({
               </span>
             </div>
 
-            {/* Table References */}
+            {/* Table References - DYNAMICALLY PARSED FROM SQL */}
             <div>
               <button
                 className="flex items-center gap-1.5 w-full text-left py-1.5 text-[10px] font-medium uppercase tracking-wider transition-colors hover:text-[#8fa3b0]"
@@ -406,41 +435,24 @@ export default function SQLPanel({
                 Table references
               </button>
               <div className="flex gap-1.5 flex-wrap mt-1">
-                <span
-                  className="px-2 py-0.5 rounded text-[10px]"
-                  style={{
-                    backgroundColor: "rgba(45,212,191,0.08)",
-                    border: "1px solid rgba(45,212,191,0.15)",
-                    color: "#2dd4bf",
-                    fontFamily: "'DM Mono', monospace",
-                  }}
-                >
-                  transactions
-                </span>
-                {sql?.toLowerCase().includes("categories") && (
-                  <span
-                    className="px-2 py-0.5 rounded text-[10px]"
-                    style={{
-                      backgroundColor: "rgba(45,212,191,0.08)",
-                      border: "1px solid rgba(45,212,191,0.15)",
-                      color: "#2dd4bf",
-                      fontFamily: "'DM Mono', monospace",
-                    }}
-                  >
-                    categories
-                  </span>
-                )}
-                {sql?.toLowerCase().includes("accounts") && (
-                  <span
-                    className="px-2 py-0.5 rounded text-[10px]"
-                    style={{
-                      backgroundColor: "rgba(45,212,191,0.08)",
-                      border: "1px solid rgba(45,212,191,0.15)",
-                      color: "#2dd4bf",
-                      fontFamily: "'DM Mono', monospace",
-                    }}
-                  >
-                    accounts
+                {tableReferences.length > 0 ? (
+                  tableReferences.map((table) => (
+                    <span
+                      key={table}
+                      className="px-2 py-0.5 rounded text-[10px]"
+                      style={{
+                        backgroundColor: "rgba(45,212,191,0.08)",
+                        border: "1px solid rgba(45,212,191,0.15)",
+                        color: "#2dd4bf",
+                        fontFamily: "'DM Mono', monospace",
+                      }}
+                    >
+                      {table}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-[10px]" style={{ color: "#5a7080" }}>
+                    No tables detected
                   </span>
                 )}
               </div>
@@ -739,7 +751,7 @@ function SqlHighlighter({ sql }: { sql: string }) {
   if (!sql) return null;
 
   const tokens = sql.split(
-    /(\s+|[(),;*+=<>!]+|'[^']*'|"[^"]*"|`[^`]*`|\b(?:SELECT|FROM|WHERE|GROUP|BY|ORDER|HAVING|JOIN|LEFT|RIGHT|INNER|OUTER|ON|AS|AND|OR|NOT|IN|BETWEEN|LIKE|IS|NULL|TRUE|FALSE|COUNT|SUM|AVG|MIN|MAX|DISTINCT|LIMIT|OFFSET|UNION|ALL|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TABLE|INDEX|VIEW|WITH|CTE|CASE|WHEN|THEN|ELSE|END|IF|EXISTS|PRIMARY|KEY|FOREIGN|REFERENCES|DEFAULT|AUTO_INCREMENT|UNIQUE|CHECK|CONSTRAINT|RETURNING|VALUES|SET|INTO|CASCADE|RESTRICT|STRFTIME|DATE_TRUNC|CURRENT_DATE|COALESCE|CAST|ROUND|FLOOR|CEIL|ABS|LENGTH|UPPER|LOWER|TRIM|SUBSTRING|REPLACE|CONCAT|NOW|EXTRACT|DATE|TIME|DATETIME|INTERVAL|JSON_ARRAY|JSON_OBJECT|ROW_NUMBER|OVER|PARTITION|WINDOW|FRAME|RANGE|ROWS|UNBOUNDED|PRECEDING|FOLLOWING|CURRENT|EXCLUDE)\b)/gi
+    /(\s+|[(),;*+=<>!]+|'[^']*'|"[^"]*"|`[^`]*`|(?:SELECT|FROM|WHERE|GROUP|BY|ORDER|HAVING|JOIN|LEFT|RIGHT|INNER|OUTER|ON|AS|AND|OR|NOT|IN|BETWEEN|LIKE|IS|NULL|TRUE|FALSE|COUNT|SUM|AVG|MIN|MAX|DISTINCT|LIMIT|OFFSET|UNION|ALL|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TABLE|INDEX|VIEW|WITH|CTE|CASE|WHEN|THEN|ELSE|END|IF|EXISTS|PRIMARY|KEY|FOREIGN|REFERENCES|DEFAULT|AUTO_INCREMENT|UNIQUE|CHECK|CONSTRAINT|RETURNING|VALUES|SET|INTO|CASCADE|RESTRICT|STRFTIME|DATE_TRUNC|CURRENT_DATE|COALESCE|CAST|ROUND|FLOOR|CEIL|ABS|LENGTH|UPPER|LOWER|TRIM|SUBSTRING|REPLACE|CONCAT|NOW|EXTRACT|DATE|TIME|DATETIME|INTERVAL|JSON_ARRAY|JSON_OBJECT|ROW_NUMBER|OVER|PARTITION|WINDOW|FRAME|RANGE|ROWS|UNBOUNDED|PRECEDING|FOLLOWING|CURRENT|EXCLUDE))/gi
   );
 
   return (
@@ -752,7 +764,7 @@ function SqlHighlighter({ sql }: { sql: string }) {
           return <span key={i} style={{ color: "#c084fc" }}>{token}</span>;
         if (/^'[^']*'$/.test(token) || /^"[^"]*"$/.test(token) || /^`[^`]*`$/ .test(token))
           return <span key={i} style={{ color: "#34d399" }}>{token}</span>;
-        if (/^\d+(\.\d+)?$/.test(token))
+        if(/^\d+(\.\d+)?$/.test(token))
           return <span key={i} style={{ color: "#67e8f9" }}>{token}</span>;
         if (/^[(),;*+=<>!]+$/.test(token))
           return <span key={i} style={{ color: "#5a7080" }}>{token}</span>;

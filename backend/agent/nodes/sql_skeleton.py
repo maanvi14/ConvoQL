@@ -85,7 +85,7 @@ def _enforce_abs_for_debits(sql: str, intent: Dict[str, Any]) -> str:
 
     is_debit_query = (type_filter == "debit" or 
                       "type = 'debit'" in sql_lower or 
-                      "type=\"debit\"" in sql_lower)
+                      'type="debit"' in sql_lower)
 
     if is_debit_query:
         sql = re.sub(r'(?i)SUM\s*\(\s*amount\s*\)', 'SUM(ABS(amount))', sql)
@@ -93,6 +93,31 @@ def _enforce_abs_for_debits(sql: str, intent: Dict[str, Any]) -> str:
         sql = re.sub(r'(?i)ORDER\s+BY\s+amount\s+ASC', 'ORDER BY ABS(amount) ASC', sql)
         sql = re.sub(r'(?i)MAX\s*\(\s*amount\s*\)', 'MAX(ABS(amount))', sql)
         sql = re.sub(r'(?i)AVG\s*\(\s*amount\s*\)', 'AVG(ABS(amount))', sql)
+
+    return sql
+
+
+def _sanitize_group_by(sql: str, group_by: List[str]) -> str:
+    """CRITICAL FIX: SQLite does not allow SELECT * with GROUP BY, and GROUP BY * is invalid syntax.
+
+    Cases handled:
+    1. group_by contains ["*"] -> remove GROUP BY entirely
+    2. SELECT * with any GROUP BY -> remove GROUP BY (can't group by *)
+    3. GROUP BY with columns not in SELECT -> SQLite may error
+    """
+    if not group_by:
+        return sql
+
+    # Case 1: group_by is literally ["*"] or contains "*"
+    if any(g.strip() == "*" for g in group_by if isinstance(g, str)):
+        sql = re.sub(r'(?i)\s+GROUP\s+BY\s+[^\n]+', '', sql)
+        return sql
+
+    # Case 2: SELECT * with GROUP BY (any columns) - SQLite requires explicit columns
+    select_star_match = re.search(r'(?i)SELECT\s+\*\s+FROM', sql)
+    if select_star_match:
+        sql = re.sub(r'(?i)\s+GROUP\s+BY\s+[^\n]+', '', sql)
+        return sql
 
     return sql
 
@@ -133,11 +158,22 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
     all_filters = list(where_filters)
 
     type_filter = intent.get("type_filter") if intent else None
-    if type_filter:
+
+    # === CRITICAL FIX: NEVER add type filter for tag/merchant/listing searches ===
+    question = (intent.get("original_question") or "").lower()
+    is_listing_query = any(w in question for w in ["show all", "show me all", "find all", "list all", "get all", "all transactions"])
+    is_tag_search = any(w in question for w in ["tag", "tagged", "subscription", "label"])
+    is_merchant_search = any(w in question for w in ["from uber", "from amazon", "merchant"])
+
+    # For listing/tag/merchant queries: NEVER add type filter
+    should_skip_type_filter = is_listing_query or is_tag_search or is_merchant_search
+
+    if type_filter and not should_skip_type_filter:
         type_filter_sql = f"type = '{type_filter}'"
         if not any(type_filter_sql.lower() in f.lower() for f in all_filters if isinstance(f, str)):
             all_filters.append(type_filter_sql)
-    elif type_filter is None:
+    elif type_filter is None or should_skip_type_filter:
+        # Remove ANY type filter for tag/merchant/listing searches or when type_filter is null
         all_filters = [f for f in all_filters if not (isinstance(f, str) and "type =" in f.lower())]
 
     for value_link in entity_links.get("linked_values", []):
@@ -220,6 +256,10 @@ async def sql_skeleton_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     sql = _fix_hallucinated_columns(sql)
     sql = _enforce_abs_for_debits(sql, intent)
+
+    # === CRITICAL FIX: Sanitize GROUP BY issues ===
+    group_by = plan.get("group_by", [])
+    sql = _sanitize_group_by(sql, group_by)
 
     if "LIMIT" not in sql.upper():
         sql = sql.rstrip(';') + "\nLIMIT 50"
