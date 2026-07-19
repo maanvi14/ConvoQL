@@ -60,6 +60,10 @@ def _fix_hallucinated_columns(sql: str) -> str:
     sql = re.sub(r'\btags\.value\b', 'tags', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\btags\[[^\]]+\]', 'tags', sql, flags=re.IGNORECASE)
 
+    # Secondary fix: accounts.account -> accounts.account_name
+    # (table-scoped so it does NOT clobber transactions.account, which is correct)
+    sql = re.sub(r'\baccounts\.account\b(?!_name)', 'accounts.account_name', sql, flags=re.IGNORECASE)
+
     sql = re.sub(
         r"(?i)WHERE\s+(\w+)\s*=\s*['\"]([^'\"]+)['\"]",
         lambda m: f"WHERE {m.group(1)} LIKE '%{m.group(2)}%'" if m.group(1).lower() == 'tags' else m.group(0),
@@ -199,6 +203,26 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
                 else:
                     all_filters.append(f"{vcolumn} = '{vvalue}'")
 
+    # ── BUG 3 FIX: Handle month_year / year_month linked_date entries ──────────
+    # Check whether the entity_links contains a *specific* month_year or
+    # year_month date entry (e.g. "March 2026" → sql_filter already computed).
+    # If so, strip any generic "this_month" / "last_month" strftime filters that
+    # may already be in all_filters from the planner, because they would produce
+    # a contradictory AND (e.g. strftime(…,'now') AND strftime(…)='2026-03').
+    _GENERIC_DATE_RE = re.compile(
+        r"strftime\('%Y-%m',\s*(?:\w+\.)?date\)\s*=\s*strftime\('%Y-%m',\s*'now'",
+        re.IGNORECASE
+    )
+    has_specific_date = any(
+        d.get("type") in ("month_year", "year_month") and d.get("sql_filter")
+        for d in entity_links.get("linked_dates", [])
+    )
+    if has_specific_date:
+        all_filters = [
+            f for f in all_filters
+            if not (isinstance(f, str) and _GENERIC_DATE_RE.search(f))
+        ]
+
     for date_ref in entity_links.get("linked_dates", []):
         dtype = date_ref["type"]
         if dtype in date_funcs:
@@ -207,12 +231,25 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
             all_filters.append(date_funcs["this_year"].format(col="date"))
         elif dtype == "last_year":
             all_filters.append(date_funcs["last_year"].format(col="date"))
+        elif dtype in ("month_year", "year_month"):
+            # BUG 3 FIX: Use the precomputed, authoritative sql_filter from
+            # column_linker instead of silently dropping these entries.
+            sql_filter = date_ref.get("sql_filter")
+            if sql_filter:
+                all_filters.append(sql_filter)
 
-    seen_filters = set()
+    # ── BUG 3 FIX: Semantic dedup — collapse table-qualified vs unqualified ──
+    # Normalise each filter by stripping table-prefix from date column
+    # (e.g. `transactions.date` → `date`) before comparing for duplicates.
+    def _normalise_filter(f: str) -> str:
+        """Normalise a filter string for dedup comparison."""
+        return re.sub(r'\b\w+\.date\b', 'date', f.strip().lower(), flags=re.IGNORECASE)
+
+    seen_filters: set = set()
     unique_filters = []
     for f in all_filters:
         if isinstance(f, str):
-            normalized = f.strip().lower()
+            normalized = _normalise_filter(f)
             if normalized not in seen_filters:
                 seen_filters.add(normalized)
                 unique_filters.append(f)
@@ -220,7 +257,16 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
             unique_filters.append(f)
 
     where_clause = " AND ".join(unique_filters) if unique_filters else "1=1"
-    group_clause = ", ".join(group_by) if group_by else ""
+
+    # ── BUG 4 FIX: Strip trailing 'AS alias' from every GROUP BY entry ────────
+    # SQLite does NOT allow 'AS alias' inside GROUP BY. The planner LLM sometimes
+    # emits `group_by: ["strftime('%Y-%m', date) AS month"]`.
+    sanitized_group_by = [
+        re.sub(r'(?i)\s+AS\s+\w+\s*$', '', g).strip()
+        for g in group_by
+        if isinstance(g, str)
+    ]
+    group_clause = ", ".join(sanitized_group_by) if sanitized_group_by else ""
     order_clause = order_by if order_by else ""
 
     sql = f"SELECT {select_clause}\nFROM {from_clause}"

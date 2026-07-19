@@ -264,18 +264,28 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Value extraction (amounts)
     # CRITICAL FIX: Skip small numbers (likely LIMIT values like "top 5")
     # Only extract amounts that look like currency values (>= 100 or have decimal)
-    amount_pattern = r'\b(?:rs\.?\s*|₹\s*|inr\s*)?(\d+(?:,\d{3})*(?:\.\d{2})?)\b'
-    amounts = re.findall(amount_pattern, question, re.IGNORECASE)
-    for a in amounts:
-        clean = a.replace(",", "")
+    # BUG 2 FIX: Also skip bare 4-digit year numbers (e.g. 2026 in "May 2026")
+    # unless they were explicitly preceded by a currency marker.
+    amount_pattern = r'\b((?:rs\.?\s*|₹\s*|inr\s*)?\d+(?:,\d{3})*(?:\.\d{2})?)\b'
+    for full_match in re.finditer(amount_pattern, question, re.IGNORECASE):
+        full_token = full_match.group(1)
+        # Determine whether a currency prefix is present in this token
+        has_currency_prefix = bool(re.match(r'^(?:rs\.?\s*|₹\s*|inr\s*)', full_token, re.IGNORECASE))
+        # Strip any currency prefix to get the raw number string
+        digits_only = re.sub(r'^(?:rs\.?\s*|₹\s*|inr\s*)', '', full_token, flags=re.IGNORECASE).strip()
+        clean = digits_only.replace(",", "")
         try:
             val = float(clean)
+            # Skip bare 4-digit calendar years (1900-2099) with no currency marker
+            if not has_currency_prefix and re.fullmatch(r'(19|20)\d{2}', clean):
+                print(f"[ColumnLinker] Skipping year-like number '{clean}' (not a currency amount)")
+                continue
             # Skip small integers that are likely LIMIT values (1-20)
             # But keep them if they have decimal places (likely amounts)
-            if '.' in a or val >= 100 or val <= 0:
+            if '.' in digits_only or val >= 100 or val <= 0:
                 entities["values"].append({"type": "amount", "value": clean, "column": "amount"})
             else:
-                print(f"[ColumnLinker] Skipping small number '{a}' (likely LIMIT value, not amount)")
+                print(f"[ColumnLinker] Skipping small number '{clean}' (likely LIMIT value, not amount)")
         except ValueError:
             pass
 

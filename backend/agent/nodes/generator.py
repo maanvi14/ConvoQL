@@ -1,4 +1,28 @@
-"""Generator node: Creates SQL from natural language with dialect awareness."""
+"""Generator node: Creates SQL from natural language with dialect awareness.
+
+NOTE: This module is NOT currently wired into the LangGraph pipeline in
+graph.py. The live path goes through structured_planner → sql_skeleton
+instead. This file is preserved as an alternative, LLM-direct SQL generation
+approach that could be wired in as a documented fallback strategy, e.g.:
+
+    workflow.add_conditional_edges(
+        "typed_error_classifier",
+        route_after_error_classification,
+        {
+            "sql_skeleton": "sql_skeleton",
+            "generator": "generator",          # <-- optional fallback
+            "result_set_validator": "result_set_validator",
+        }
+    )
+
+Do NOT import generator_node into graph.py unless you intend to wire it in.
+Leaving it imported-but-unused would cause an unnecessary ChatGroq
+instantiation on every module load.
+
+Also note: _fix_group_by() in this file only handles the case of a bare
+`date` column missing from GROUP BY. It is only called from generator_node
+(which is currently unreachable), so it has no effect on the live pipeline.
+"""
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from typing import Dict, Any, List

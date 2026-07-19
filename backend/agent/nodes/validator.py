@@ -14,16 +14,14 @@ _schema_cache = None
 
 async def _get_schema_columns() -> Dict[str, List[str]]:
     """Get actual columns from schema for validation."""
-    global _schema_cache
-    if _schema_cache is None:
-        schema = await db_manager.get_schema()
-        _schema_cache = {}
-        for table in schema.get("tables", []):
-            table_name = table["name"].lower()
-            _schema_cache[table_name] = [col["name"].lower() for col in table.get("columns", [])]
-            # Also store original case for error messages
-            _schema_cache[f"{table_name}_orig"] = [col["name"] for col in table.get("columns", [])]
-    return _schema_cache
+    schema = await db_manager.get_schema()
+    schema_cache = {}
+    for table in schema.get("tables", []):
+        table_name = table["name"].lower()
+        schema_cache[table_name] = [col["name"].lower() for col in table.get("columns", [])]
+        # Also store original case for error messages
+        schema_cache[f"{table_name}_orig"] = [col["name"] for col in table.get("columns", [])]
+    return schema_cache
 
 
 def _extract_table_column_refs(sql: str) -> List[tuple]:
@@ -52,12 +50,19 @@ def _extract_bare_column_refs(sql: str) -> List[str]:
         func_aliases = re.findall(r'\)\s+(\w+)\b', select_part)
         aliases.update(a.lower() for a in func_aliases if a.lower() not in {'from', 'where', 'and', 'or'})
 
+    # --- Bug 1 fix: extract table names so we can exclude table-prefix tokens ---
+    from_tables_set = set(_extract_from_tables(sql_clean))
+
+    # Regex: negative lookbehind (not preceded by word-char or dot) AND
+    # negative lookahead (not followed by a dot) — this prevents the table part
+    # of `table.column` from being treated as a bare column reference.
+    _BARE_COL_RE = r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b(?!\.)'
+
     # Extract column names from SELECT clause (skip aliases)
     select_cols = []
     if select_match:
         select_part = select_match.group(1)
-        # Simple approach: extract words that look like column names
-        raw_cols = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', select_part)
+        raw_cols = re.findall(_BARE_COL_RE, select_part)
         select_cols = [c for c in raw_cols if c.lower() not in aliases]
 
     # Extract from WHERE, GROUP BY, ORDER BY, HAVING
@@ -65,12 +70,12 @@ def _extract_bare_column_refs(sql: str) -> List[str]:
     where_cols = []
     if where_match:
         where_part = where_match.group(1)
-        where_cols = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', where_part)
+        where_cols = re.findall(_BARE_COL_RE, where_part)
 
     group_match = re.search(r'GROUP\s+BY\s+(.*?)(?:ORDER\s+BY|HAVING|LIMIT|$)', sql_clean, re.IGNORECASE | re.DOTALL)
     group_cols = []
     if group_match:
-        group_cols = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', group_match.group(1))
+        group_cols = re.findall(_BARE_COL_RE, group_match.group(1))
 
     order_match = re.search(r'ORDER\s+BY\s+(.*?)(?:LIMIT|$)', sql_clean, re.IGNORECASE | re.DOTALL)
     order_cols = []
@@ -78,7 +83,7 @@ def _extract_bare_column_refs(sql: str) -> List[str]:
         # In ORDER BY, aliases ARE valid references to SELECT expressions
         # So we should NOT flag aliases used in ORDER BY
         order_part = order_match.group(1)
-        order_cols = re.findall(r'(?<![\w.])\b([a-zA-Z_][a-zA-Z0-9_]*)\b', order_part)
+        order_cols = re.findall(_BARE_COL_RE, order_part)
         # Remove aliases from validation since they're valid in ORDER BY
         order_cols = [c for c in order_cols if c.lower() not in aliases]
 
@@ -97,7 +102,14 @@ def _extract_bare_column_refs(sql: str) -> List[str]:
         'UNIQUE', 'CHECK', 'FOREIGN', 'REFERENCES', 'DEFAULT', 'NOTNULL',
     }
 
-    return [c for c in all_cols if c.upper() not in sql_keywords and not c.upper().startswith('SQLITE_')]
+    # Belt-and-suspenders: also exclude any token that is itself a table name
+    # (catches the rare case where the lookahead regex still lets a table-prefix through)
+    return [
+        c for c in all_cols
+        if c.upper() not in sql_keywords
+        and not c.upper().startswith('SQLITE_')
+        and c.lower() not in from_tables_set
+    ]
 
 
 def _extract_from_tables(sql: str) -> List[str]:

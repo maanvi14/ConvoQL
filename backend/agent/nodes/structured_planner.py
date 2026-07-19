@@ -309,13 +309,24 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 plan["select_columns"] = ["*"]
 
         # === CRITICAL FIX: Sanitize group_by - NEVER allow "*" ===
+        # BUG 4 FIX: Also strip trailing "AS alias" from GROUP BY entries.
+        # SQLite rejects `GROUP BY strftime('%Y-%m', date) AS month` with a
+        # syntax error. Strip the alias here at the plan level so it never
+        # reaches sql_skeleton or the validator.
         group_by = plan.get("group_by", [])
         sanitized_group_by = []
         for g in group_by:
             if isinstance(g, str) and g.strip() == "*":
                 print(f"[Planner] REMOVING invalid '*' from group_by")
                 continue
-            sanitized_group_by.append(g)
+            if isinstance(g, str):
+                # Strip trailing AS alias (SQLite GROUP BY does not allow it)
+                g_clean = re.sub(r'(?i)\s+AS\s+\w+\s*$', '', g).strip()
+                if g_clean != g:
+                    print(f"[Planner] Stripped AS alias from group_by: '{g}' -> '{g_clean}'")
+                sanitized_group_by.append(g_clean)
+            else:
+                sanitized_group_by.append(g)
         plan["group_by"] = sanitized_group_by
 
         # === AGGRESSIVE SINGLE-TABLE ENFORCEMENT ===
