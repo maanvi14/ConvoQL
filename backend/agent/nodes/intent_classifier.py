@@ -10,11 +10,83 @@ from db.connection import db_manager
 
 settings = get_settings()
 
+# === GREETING / IRRELEVANCE DETECTION ===
+# Deterministic guard: catch greetings, small talk, and non-data questions
+# BEFORE the LLM call to avoid burning tokens and generating garbage SQL.
+GREETING_PATTERNS = [
+    r'^\s*hello\s*$',
+    r'^\s*hi\s*$',
+    r'^\s*hey\s*$',
+    r'^\s*howdy\s*$',
+    r'^\s*greetings\s*$',
+    r'^\s*good morning\s*$',
+    r'^\s*good afternoon\s*$',
+    r'^\s*good evening\s*$',
+    r'^\s*what\s+up\s*$',
+    r'^\s*sup\s*$',
+    r'^\s*yo\s*$',
+    r'^\s*thanks?\s*$',
+    r'^\s*thank you\s*$',
+    r'^\s*bye\s*$',
+    r'^\s*goodbye\s*$',
+    r'^\s*see ya\s*$',
+    r'^\s*ok\s*$',
+    r'^\s*okay\s*$',
+    r'^\s*sure\s*$',
+    r'^\s*yes\s*$',
+    r'^\s*no\s*$',
+    r'^\s*maybe\s*$',
+    r'^\s*\?+\s*$',
+]
+
+IRRELEVANT_PATTERNS = [
+    r'\bweather\b',
+    r'\bnews\b',
+    r'\bjoke\b',
+    r'\bstory\b',
+    r'\btime is it\b',
+    r'\bwho are you\b',
+    r'\bwhat can you do\b',
+]
+
+# Financial/data keywords that indicate a valid query
+DATA_KEYWORDS = {
+    "spend", "spent", "spending", "expense", "expenses", "budget", "allocated",
+    "transaction", "transactions", "account", "accounts", "balance", "income",
+    "salary", "credit", "debit", "purchase", "purchased", "bought", "paid",
+    "payment", "category", "categories", "merchant", "tag", "tags",
+    "month", "year", "date", "trend", "compare", "vs", "versus", "highest",
+    "lowest", "top", "average", "total", "sum", "amount", "money", "cash",
+    "saving", "savings", "investment", "dividend", "interest", "refund",
+    "bill", "bills", "rent", "groceries", "food", "travel", "shopping",
+    "health", "entertainment", "uber", "amazon", "netflix", "zomato",
+    "swiggy", "hdfc", "icici", "paytm", "upi", "card", "loan", "emi",
+    "over", "under", "utilization",
+}
+
+
+def _is_greeting_or_irrelevant(question: str) -> Tuple[bool, str]:
+    """Return (True, reason) if the question is a greeting, small talk,
+    or completely irrelevant to financial data analysis."""
+    q_lower = question.lower().strip()
+
+    for pattern in GREETING_PATTERNS:
+        if re.search(pattern, q_lower):
+            return True, "greeting"
+
+    for pattern in IRRELEVANT_PATTERNS:
+        if re.search(pattern, q_lower):
+            return True, "irrelevant"
+
+    words = set(re.findall(r'\b[a-z]+\b', q_lower))
+    if not (words & DATA_KEYWORDS):
+        if len(q_lower.split()) <= 2 and not any(c.isdigit() for c in q_lower):
+            return True, "no_data_keywords"
+
+    return False, ""
+
+
 # === DETERMINISTIC TYPE FILTER SIGNALS ===
-# These are checked AFTER the LLM to override hallucinations. Unlike the
-# JOIN-detection logic below, these are generic English vocabulary for the
-# debit/credit distinction that this app always has (not a per-dataset value
-# list), so they stay as a fixed heuristic set.
 DEBIT_SIGNALS = {
     "expense", "expenses", "spent", "spending", "spend",
     "purchase", "purchased", "purchases",
@@ -122,19 +194,7 @@ def _enforce_type_filter(question: str, intent_data: Dict[str, Any]) -> Dict[str
 
 
 async def _detect_join_signals(question: str) -> Tuple[bool, Set[str]]:
-    """Determine whether the question likely needs a multi-table JOIN by
-    inspecting the LIVE schema, instead of a hardcoded phrase/table list
-    (the old JOIN_SIGNALS set literally hardcoded "budget", "account
-    balance", etc. — which only worked for this one app's table names and
-    would silently miss/misfire on any other schema).
-
-    Heuristic: the "primary" table is the one with the most columns (usually
-    the main transactions-style ledger). Any OTHER table is a JOIN candidate.
-    If the question mentions that table's name (or its singular form), or
-    references one of its columns that ISN'T also a column on the primary
-    table (so we don't false-positive on shared column names like
-    'category'), we flag requires_join=True.
-    """
+    """Determine whether the question likely needs a multi-table JOIN."""
     try:
         schema = await db_manager.get_schema()
     except Exception as e:
@@ -165,7 +225,7 @@ async def _detect_join_signals(question: str) -> Tuple[bool, Set[str]]:
         for col in table.get("columns", []):
             col_lower = col["name"].lower()
             if col_lower in primary_cols:
-                continue  # shared column name — not a strong join signal
+                continue
             spaced = col_lower.replace("_", " ")
             if col_lower in q_lower or spaced in q_lower:
                 hits.add(f"{table_name_lower}.{col_lower}")
@@ -174,6 +234,28 @@ async def _detect_join_signals(question: str) -> Tuple[bool, Set[str]]:
 
 
 async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    question = state["question"]
+
+    # === DETERMINISTIC GUARD: Greeting / small talk / irrelevant ===
+    is_irrelevant, reason = _is_greeting_or_irrelevant(question)
+    if is_irrelevant:
+        print(f"[IntentClassifier] GUARD triggered: '{question}' -> {reason}. Skipping LLM.")
+        return {
+            **state,
+            "intent": {
+                "primary_intent": "greeting",
+                "secondary_intents": [],
+                "confidence": 1.0,
+                "requires_join": False,
+                "time_dimension": None,
+                "aggregation_type": None,
+                "type_filter": None,
+                "entities": [],
+                "is_greeting": True,
+                "greeting_reason": reason,
+            },
+        }
+
     llm = ChatGroq(
         api_key=settings.GROQ_API_KEY,
         model_name=settings.LLM_MODEL,
@@ -183,7 +265,7 @@ async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
     prompt = ChatPromptTemplate.from_template(INTENT_PROMPT)
     chain = prompt | llm
 
-    response = await chain.ainvoke({"question": state["question"]})
+    response = await chain.ainvoke({"question": question})
 
     try:
         content = response.content.strip()
@@ -203,8 +285,7 @@ async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
         intent_data.setdefault("type_filter", None)
         intent_data.setdefault("entities", [])
 
-        # === Enforce type_filter rules deterministically ===
-        intent_data = _enforce_type_filter(state["question"], intent_data)
+        intent_data = _enforce_type_filter(question, intent_data)
 
     except Exception as e:
         print(f"Intent classification failed: {e}. Falling back to filter_lookup.")
@@ -219,8 +300,7 @@ async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "entities": [],
         }
 
-    # === Schema-driven JOIN detection (replaces hardcoded JOIN_SIGNALS) ===
-    has_join_signal, join_hits = await _detect_join_signals(state["question"])
+    has_join_signal, join_hits = await _detect_join_signals(question)
     if has_join_signal and not intent_data.get("requires_join", False):
         print(f"[IntentClassifier] Forcing requires_join=True based on schema signals: {join_hits}")
         intent_data["requires_join"] = True
@@ -231,5 +311,3 @@ async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **state,
         "intent": intent_data,
     }
-
-

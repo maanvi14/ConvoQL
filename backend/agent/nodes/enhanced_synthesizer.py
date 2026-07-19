@@ -173,6 +173,38 @@ def _build_fallback_answer(result: Dict[str, Any], question: str, chart_type: Op
 
 
 async def enhanced_synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    # === GUARD: Greeting / irrelevant questions skip SQL generation ===
+    intent = state.get("intent", {}) or {}
+    if intent.get("is_greeting"):
+        reason = intent.get("greeting_reason", "")
+        if reason == "greeting":
+            answer = "Hey there! I'm ConvoQL, your financial data assistant. Ask me anything about your spending, budgets, income, or transactions — like 'How much did I spend this month?' or 'Compare my budget vs actual spending for May'."
+        elif reason == "irrelevant":
+            answer = "I'm focused on helping you analyze your financial data. Try asking about your spending, budgets, income, or transactions."
+        else:
+            answer = "I'm here to help you explore your financial data. What would you like to know about your spending, budgets, or accounts?"
+
+        return {
+            **state,
+            "answer": answer,
+            "explanation": answer,
+            "has_chart": False,
+            "chart_type": None,
+            "chart_title": None,
+            "has_table": False,
+            "insight": None,
+            "follow_ups": [
+                "How much did I spend this month?",
+                "Compare my budget vs actual spending for May",
+                "Show me my top 3 spending categories",
+            ],
+            "sql_result": None,
+            "generated_sql": "",
+            "valid": True,
+            "result_set_valid": True,
+            "narrative": "Ask me about your finances!",
+        }
+
     llm = ChatGroq(
         api_key=settings.GROQ_API_KEY,
         model_name=settings.LLM_MODEL,

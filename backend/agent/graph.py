@@ -50,16 +50,26 @@ workflow.add_node("narrative_generator", narrative_generator_node)
 # Entry point
 workflow.set_entry_point("intent_classifier")
 
-# Layer 1 -> Layer 2
-workflow.add_edge("intent_classifier", "query_decomposer")
+# === CONDITIONAL: Greeting / irrelevant -> skip SQL generation ===
+def route_after_intent(state: AgentState) -> str:
+    """Route after intent classification: greeting/irrelevant -> synthesizer, else -> query_decomposer."""
+    intent = state.get("intent", {}) or {}
+    if intent.get("is_greeting"):
+        reason = intent.get("greeting_reason", "")
+        print(f"[Router] Greeting/irrelevant detected (reason={reason}). Skipping SQL pipeline.")
+        return "enhanced_synthesizer"
+    return "query_decomposer"
+
+workflow.add_conditional_edges(
+    "intent_classifier",
+    route_after_intent,
+    {
+        "query_decomposer": "query_decomposer",
+        "enhanced_synthesizer": "enhanced_synthesizer",
+    }
+)
 
 # === CONDITIONAL: Decomposition -> sub-query pipeline or single-query pipeline ===
-# BUG FIX: query_decomposer_node's output (state["decomposition"]) used to be
-# computed and then never read by anything — every question, compound or not,
-# fell through to the single-query pipeline below, so "compare my HDFC
-# spending vs ICICI spending" silently ran as one (usually wrong) query.
-# Compound questions now route to sub_query_executor_node, which runs each
-# sub-question through its own copy of the pipeline and merges the results.
 def route_after_decomposition(state: AgentState) -> str:
     """Route after decomposition: compound -> sub_query_executor, else -> single-query pipeline."""
     decomposition = state.get("decomposition", {}) or {}
@@ -86,14 +96,6 @@ workflow.add_conditional_edges(
 # so it skips straight to synthesis rather than the single-query validator loop.
 workflow.add_edge("sub_query_executor", "enhanced_synthesizer")
 
-# BUG FIX: dynamic_few_shot_node reads state["intent"] (set by intent_classifier,
-# available since the very first node) and writes state["few_shot_examples"].
-# structured_planner_node reads state["few_shot_examples"] into its prompt.
-# The old order (structured_planner -> dynamic_few_shot) ran the planner BEFORE
-# the examples existed, so few_shot_context was always empty on the first pass
-# — the selected examples only became visible on a retry, one full attempt late.
-# dynamic_few_shot only depends on intent, not on decomposition/schema, so it's
-# safe to run it right after query_decomposer and before structured_planner.
 workflow.add_edge("dynamic_few_shot", "structured_planner")
 
 # Layer 2 -> Layer 3
@@ -135,22 +137,7 @@ def route_after_error_classification(state: AgentState) -> str:
         print("[Retry] Max retries reached. Proceeding to synthesis with error.")
         return "result_set_validator"
 
-    # BUG 3b FIX: sql_skeleton_node is a pure deterministic function of
-    # `structured_plan` / `entity_links` / `intent` — none of which change
-    # between attempts. Routing retries back to it just rebuilds byte-identical
-    # SQL and silently burns all 3 retries with no chance of success. Retries
-    # now go back to structured_planner_node so the LLM is actually re-invoked
-    # with the retry_hint, and the graph's static edges
-    # (structured_planner -> dynamic_few_shot -> column_linker -> sql_skeleton)
-    # naturally regenerate the whole pipeline from a corrected plan.
     if retry_count == 2:
-        # The deterministic structured_planner -> column_linker -> sql_skeleton
-        # pipeline has now failed twice with the SAME strategy. Rather than
-        # spend the last retry repeating that strategy a third time, fall back
-        # to generator_node's LLM-direct SQL generation (previously written
-        # but never wired into the graph) for this final attempt — it takes a
-        # different path through the problem and sometimes succeeds where the
-        # structured plan keeps failing the same way.
         print("[Retry] Falling back to generator_node (LLM-direct strategy) for final attempt.")
         return "generator"
 
@@ -166,8 +153,6 @@ workflow.add_conditional_edges(
     }
 )
 
-# generator_node's SQL goes through the same validator as the structured
-# pipeline's SQL — the validator is generic over state["generated_sql"].
 workflow.add_edge("generator", "validator")
 
 # === CONDITIONAL: Result Set Validation -> Retry or Synthesize ===
