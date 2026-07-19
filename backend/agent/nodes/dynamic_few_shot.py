@@ -36,11 +36,18 @@ LIMIT 50
     "budget_compare": """Question: "Which categories are over budget this month?"
 SQL:
 ```sql
-SELECT b.category, b.allocated AS budget, b.spent,
-       ROUND((b.spent / b.allocated) * 100, 2) AS pct_used
+SELECT b.category,
+       b.allocated AS budget,
+       COALESCE(SUM(ABS(t.amount)), 0) AS total_spent,
+       ROUND((COALESCE(SUM(ABS(t.amount)), 0) / b.allocated) * 100, 2) AS pct_used
 FROM budgets b
+LEFT JOIN transactions t
+  ON b.category = t.category
+  AND strftime('%Y-%m', t.date) = strftime('%Y-%m', b.month_year)
+  AND t.type = 'debit'
 WHERE strftime('%Y-%m', b.month_year) = strftime('%Y-%m', 'now')
-  AND b.spent > b.allocated
+GROUP BY b.category, b.allocated
+HAVING total_spent > b.allocated
 ORDER BY pct_used DESC
 ```""",
 
@@ -116,4 +123,3 @@ async def dynamic_few_shot_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **state,
         "few_shot_examples": examples,
     }
-

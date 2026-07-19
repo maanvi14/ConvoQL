@@ -165,6 +165,119 @@ def _enforce_abs_for_debits(sql: str, intent: Dict[str, Any]) -> str:
     return sql
 
 
+def _fix_budget_comparison_sql(sql: str, question: str, intent: Dict[str, Any]) -> str:
+    """CRITICAL FIX: Budget-vs-actual comparison queries must use LEFT JOIN
+    from budgets to transactions, with COALESCE on the aggregate, so ALL
+    budgeted categories appear even when they have no transactions.
+
+    This post-processes the SQL after build_sql_from_plan because the planner
+    sometimes emits INNER JOIN (dropping categories with zero spending) or
+    forgets COALESCE (showing NULL instead of 0).
+    """
+    q_lower = question.lower()
+
+    # Detect budget-vs-actual comparison
+    is_budget_compare = any(pattern in q_lower for pattern in [
+        "budget vs actual", "budget versus actual", "budget against actual",
+        "actual spending vs budget", "compare budget", "budget vs spending",
+        "allocated vs spent", "over budget", "under budget", "budget utilization",
+    ])
+
+    # Also check intent
+    intent_primary = (intent.get("primary_intent") or "").lower()
+    if intent_primary in ("budget_compare", "multi_table_join"):
+        is_budget_compare = True
+
+    if not is_budget_compare:
+        return sql
+
+    sql_lower = sql.lower()
+
+    # Only fix if budgets table is involved
+    if "budgets" not in sql_lower:
+        return sql
+
+    print(f"[SQLSkeleton] BUDGET_COMPARE_FIX firing for: '{question}'")
+
+    # ── Fix 1: Force LEFT JOIN instead of INNER JOIN for budgets-transactions join ──
+    # Pattern: INNER JOIN budgets ... or INNER JOIN transactions ...
+    # We want: LEFT JOIN when joining budgets and transactions
+    sql = re.sub(
+        r'(?i)(FROM\s+\w+\s+)(INNER\s+JOIN\s+(?:budgets|transactions)\s+ON\s+[^
+]+)',
+        lambda m: f"{m.group(1)}LEFT JOIN{m.group(2)[10:]}",  # Replace INNER JOIN with LEFT JOIN
+        sql
+    )
+    # Also catch if budgets is the FROM table and transactions is joined
+    sql = re.sub(
+        r'(?i)(FROM\s+budgets[^
+]*
+)(?:INNER\s+)?JOIN\s+transactions',
+        r'LEFT JOIN transactions',
+        sql
+    )
+    # And if transactions is FROM and budgets is joined
+    sql = re.sub(
+        r'(?i)(FROM\s+transactions[^
+]*
+)(?:INNER\s+)?JOIN\s+budgets',
+        r'LEFT JOIN budgets',
+        sql
+    )
+
+    # ── Fix 2: COALESCE SUM(ABS(...)) to show 0 instead of NULL ──
+    # Pattern: SUM(ABS(transactions.amount)) or SUM(ABS(amount))
+    sql = re.sub(
+        r'(?i)SUM\s*\(\s*ABS\s*\(\s*(?:transactions\.)?amount\s*\)\s*\)(\s+AS\s+\w+)?',
+        lambda m: f"COALESCE(SUM(ABS({re.search(r'(?i)(?:transactions\.)?amount', m.group(0)).group()})), 0){m.group(1) or ''}",
+        sql
+    )
+    # Also catch bare SUM(amount) without ABS
+    sql = re.sub(
+        r'(?i)SUM\s*\(\s*(?:transactions\.)?amount\s*\)(\s+AS\s+\w+)?',
+        lambda m: f"COALESCE(SUM(ABS({re.search(r'(?i)(?:transactions\.)?amount', m.group(0)).group()})), 0){m.group(1) or ''}",
+        sql
+    )
+
+    # ── Fix 3: Ensure GROUP BY includes category ──
+    # If GROUP BY only has month/date expression, add category
+    group_match = re.search(r'(?i)GROUP\s+BY\s+([^
+]+?)(?:\s+ORDER\s+BY|\s+LIMIT|$)', sql)
+    if group_match:
+        group_clause = group_match.group(1).strip()
+        group_lower = group_clause.lower()
+        # Check if category is missing from GROUP BY
+        has_category_in_group = any(cat in group_lower for cat in [
+            "category", "budgets.category", "transactions.category", "b.category", "t.category"
+        ])
+        if not has_category_in_group:
+            # Add category to GROUP BY
+            new_group = f"budgets.category, {group_clause}"
+            sql = sql[:group_match.start(1)] + new_group + sql[group_match.end(1):]
+            print(f"[SQLSkeleton] Added budgets.category to GROUP BY")
+
+    # ── Fix 4: Move transactions.type = 'debit' from WHERE to JOIN ON if present ──
+    # This is critical for LEFT JOIN — putting type filter in WHERE converts it to INNER JOIN
+    type_filter_match = re.search(r"(?i)(WHERE\s+.*?)(AND\s+transactions\.type\s*=\s*'debit')", sql)
+    if type_filter_match:
+        # Remove from WHERE
+        sql = sql[:type_filter_match.start(2)] + sql[type_filter_match.end(2):]
+        # Clean up trailing AND or WHERE 1=1
+        sql = re.sub(r"(?i)WHERE\s+1=1\s+AND\s+", "WHERE ", sql)
+        sql = re.sub(r"(?i)WHERE\s+AND\s+", "WHERE ", sql)
+        sql = re.sub(r"(?i)AND\s+1=1", "", sql)
+        # Add to JOIN ON condition
+        join_match = re.search(r"(?i)(LEFT\s+JOIN\s+transactions\s+ON\s+)([^
+]+)", sql)
+        if join_match:
+            on_cond = join_match.group(2).strip()
+            new_on = f"{on_cond} AND transactions.type = 'debit'"
+            sql = sql[:join_match.start(2)] + new_on + sql[join_match.end(2):]
+            print(f"[SQLSkeleton] Moved type='debit' from WHERE to JOIN ON")
+
+    return sql
+
+
 def _sanitize_group_by(sql: str, group_by: List[str]) -> str:
     """CRITICAL FIX: SQLite does not allow SELECT * with GROUP BY, and GROUP BY * is invalid syntax.
 
@@ -510,6 +623,10 @@ async def sql_skeleton_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     sql = _fix_hallucinated_columns(sql)
     sql = _enforce_abs_for_debits(sql, intent)
+
+    # === CRITICAL FIX: Budget comparison queries need LEFT JOIN + COALESCE ===
+    question = state.get("question", "")
+    sql = _fix_budget_comparison_sql(sql, question, intent)
 
     # === CRITICAL FIX: Sanitize GROUP BY issues ===
     group_by = plan.get("group_by", [])

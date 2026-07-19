@@ -113,6 +113,7 @@ CRITICAL RULES:
 6. TABLE SELECTION RULES:
    - For simple transaction/spending/category/merchant/tag/account queries: use ONLY the transactions table
    - For budget-related queries (budget vs actual, over budget, allocated vs spent): MUST JOIN with budgets table
+   - For "budget vs actual" comparisons specifically: use LEFT JOIN from budgets to transactions so ALL budgeted categories appear even with zero spending
    - For account balance queries (total balance, highest balance): MUST use accounts table
    - For category metadata (color, icon): MUST JOIN with categories table
    - When JOINs are needed, include the correct ON condition (e.g., "transactions.category = budgets.category")
@@ -129,7 +130,8 @@ CRITICAL RULES:
 17. JOIN RULES:
     - NEVER join a table to itself (e.g., "budgets INNER JOIN budgets" is WRONG)
     - The left table in FROM must be different from the right table in JOIN
-    - For budget queries, use: FROM transactions INNER JOIN budgets ON transactions.category = budgets.category
+    - For budget queries, use: FROM budgets LEFT JOIN transactions ON budgets.category = transactions.category (preserves all budget rows)
+    - For budget-vs-actual comparisons: budgets must be the LEFT table (FROM budgets LEFT JOIN transactions) so categories with no spending still appear
     - For account queries, use: FROM accounts (no JOIN needed for simple balance queries)
     - NEVER use "transactions.date" if transactions is not the primary table — check which table has the date column
 18. COLUMN QUALIFICATION:
@@ -161,6 +163,23 @@ CRITICAL RULES:
     - "Show me total spending by category" -> group_by = ["category"]
     - "Which category has highest spending" -> group_by = ["category"]
     - "Show all transactions" -> group_by = []
+
+23. BUDGET COMPARISON RULES (CRITICAL):
+    - For "budget vs actual spending" or "compare budget to spending":
+      a) PRIMARY table MUST be budgets (FROM budgets), NOT transactions
+      b) Use LEFT JOIN transactions ON budgets.category = transactions.category AND <month alignment>
+      c) This ensures ALL budgeted categories appear, even those with ZERO transactions
+      d) Use COALESCE(SUM(ABS(transactions.amount)), 0) AS total_spent to show 0 for empty categories
+      e) GROUP BY must include: budgets.category, budgets.allocated (and month if present)
+      f) select_columns should be: ["budgets.category", "budgets.allocated AS budget", "COALESCE(SUM(ABS(transactions.amount)), 0) AS total_spent"]
+      g) WHERE should filter budgets.month_year to the target month (e.g. strftime('%Y-%m', budgets.month_year) = '2026-05')
+      h) NEVER put transactions.type = 'debit' in the WHERE clause — put it in the JOIN ON condition instead, so categories with no debit transactions still appear
+    - Example correct plan for "Compare budget vs actual for May":
+      tables: ["budgets"]
+      joins: [{"type": "LEFT JOIN", "left_table": "budgets", "right_table": "transactions", "on_condition": "budgets.category = transactions.category AND strftime('%Y-%m', transactions.date) = strftime('%Y-%m', budgets.month_year) AND transactions.type = 'debit'"}]
+      select_columns: ["budgets.category", "budgets.allocated AS budget", "COALESCE(SUM(ABS(transactions.amount)), 0) AS total_spent"]
+      where_filters: ["strftime('%Y-%m', budgets.month_year) = '2026-05'"]
+      group_by: ["budgets.category", "budgets.allocated"]
 
 JSON PLAN ONLY:"""
 
