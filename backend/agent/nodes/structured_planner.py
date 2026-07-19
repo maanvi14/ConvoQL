@@ -176,7 +176,7 @@ CRITICAL RULES:
       h) NEVER put transactions.type = 'debit' in the WHERE clause — put it in the JOIN ON condition instead, so categories with no debit transactions still appear
     - Example correct plan for "Compare budget vs actual for May":
       tables: ["budgets"]
-      joins: [{"type": "LEFT JOIN", "left_table": "budgets", "right_table": "transactions", "on_condition": "budgets.category = transactions.category AND strftime('%Y-%m', transactions.date) = strftime('%Y-%m', budgets.month_year) AND transactions.type = 'debit'"}]
+      joins: [{{"type": "LEFT JOIN", "left_table": "budgets", "right_table": "transactions", "on_condition": "budgets.category = transactions.category AND strftime('%Y-%m', transactions.date) = strftime('%Y-%m', budgets.month_year) AND transactions.type = 'debit'"}}]
       select_columns: ["budgets.category", "budgets.allocated AS budget", "COALESCE(SUM(ABS(transactions.amount)), 0) AS total_spent"]
       where_filters: ["strftime('%Y-%m', budgets.month_year) = '2026-05'"]
       group_by: ["budgets.category", "budgets.allocated"]
