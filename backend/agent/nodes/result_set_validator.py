@@ -1,19 +1,47 @@
 """Result-set validator: Checks semantic correctness and triggers retry."""
 from typing import Dict, Any, List
 
+from db.connection import db_manager
+
 async def result_set_validator_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate that query results make semantic sense. Detects suspicious 0-row results."""
-    result = state.get("sql_result")
+    """Validate that query results make semantic sense. Detects suspicious 0-row results.
+
+    BUG 3a FIX: This node used to assume `state["sql_result"]` was already
+    populated. In practice nothing upstream ever set it — the only place that
+    actually executed SQL was `enhanced_synthesizer_node`, which runs *after*
+    this node in the graph (validator -> result_set_validator -> enhanced_synthesizer).
+    That meant `result` was always None here, so every check below was skipped
+    and this node unconditionally returned `result_set_valid=True`, making it a
+    permanent no-op. It now executes the query itself (once) and reuses that
+    result downstream, so enhanced_synthesizer_node does not re-execute it.
+    """
     question = state.get("question", "").lower()
     intent = state.get("intent", {})
-    generated_sql = state.get("generated_sql", "").lower()
+    generated_sql_raw = state.get("generated_sql", "")
+    generated_sql = generated_sql_raw.lower()
 
-    if not result:
-        return {
-            **state,
-            "result_set_valid": True,
-            "result_set_issue": None,
-        }
+    result = state.get("sql_result")
+
+    if result is None:
+        try:
+            result = await db_manager.execute_readonly(generated_sql_raw)
+            state["sql_result"] = result
+        except Exception as e:
+            # A real execution failure the validator's EXPLAIN/dry-run didn't catch
+            # (e.g. a runtime-only error). Route this back through the retry loop
+            # instead of silently reporting "valid".
+            print(f"[ResultSetValidator] Execution failed: {e}")
+            state["error"] = f"Result set validator: execution failed: {str(e)}"
+            state["retry_hint"] = (
+                "The query failed at execution time even though it passed the "
+                "earlier dry-run check. Re-check column names, JOIN conditions, "
+                "and SQLite syntax."
+            )
+            state["valid"] = False
+            state["result_set_valid"] = False
+            state["result_set_issue"] = f"Execution error: {str(e)}"
+            state["sql_result"] = None
+            return state
 
     rows = result.get("rows", [])
     columns = result.get("columns", [])

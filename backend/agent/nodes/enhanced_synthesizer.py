@@ -272,3 +272,5 @@ async def enhanced_synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     state["row_count"] = total_rows
 
     return state
+
+

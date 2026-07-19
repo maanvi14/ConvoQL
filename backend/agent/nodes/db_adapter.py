@@ -101,3 +101,4 @@ def adapt_schema_for_dialect(schema: Dict[str, Any], dialect: str) -> Dict[str, 
     but can be extended for dialect-specific type mappings.
     """
     return schema
+

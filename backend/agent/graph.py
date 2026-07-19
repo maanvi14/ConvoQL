@@ -90,14 +90,21 @@ def route_after_error_classification(state: AgentState) -> str:
         print("[Retry] Max retries reached. Proceeding to synthesis with error.")
         return "result_set_validator"
 
-    # Retry: go back to sql_skeleton so full regeneration happens with retry_hint
-    return "sql_skeleton"
+    # BUG 3b FIX: sql_skeleton_node is a pure deterministic function of
+    # `structured_plan` / `entity_links` / `intent` — none of which change
+    # between attempts. Routing retries back to it just rebuilds byte-identical
+    # SQL and silently burns all 3 retries with no chance of success. Retries
+    # now go back to structured_planner_node so the LLM is actually re-invoked
+    # with the retry_hint, and the graph's static edges
+    # (structured_planner -> dynamic_few_shot -> column_linker -> sql_skeleton)
+    # naturally regenerate the whole pipeline from a corrected plan.
+    return "structured_planner"
 
 workflow.add_conditional_edges(
     "typed_error_classifier",
     route_after_error_classification,
     {
-        "sql_skeleton": "sql_skeleton",
+        "structured_planner": "structured_planner",
         "result_set_validator": "result_set_validator",
     }
 )

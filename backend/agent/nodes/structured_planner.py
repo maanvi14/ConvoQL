@@ -55,7 +55,7 @@ USER QUESTION: {question}
 DETECTED INTENT: {intent}
 
 DECOMPOSITION: {decomposition}
-
+{retry_context}
 === CRITICAL AMOUNT SIGN CONVENTION ===
 The `amount` column uses SIGNED values:
   - Debits (expenses, purchases, payments): NEGATIVE values
@@ -262,6 +262,31 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
     print(f"[Planner] Detected date filter template: {date_filter_template}")
     print(f"[Planner] Query type: listing={is_listing_query}, tag={is_tag_query}, merchant={is_merchant_query}")
 
+    # === BUG 3b FIX: Surface retry context to the LLM ===
+    # typed_error_classifier_node is the only place retry_count is incremented,
+    # and it stores a targeted retry_hint. On the first call retry_count is 0
+    # (or unset) and there's nothing to show. On a retry, tell the LLM exactly
+    # what the last SQL attempt was and why it failed so it doesn't just
+    # regenerate the same plan.
+    retry_count = state.get("retry_count", 0)
+    retry_hint = state.get("retry_hint")
+    previous_sql = state.get("generated_sql")
+    previous_error = state.get("error")
+
+    if retry_count > 0 and (retry_hint or previous_error):
+        retry_context = f"""
+=== RETRY CONTEXT (attempt {retry_count + 1} of 4) ===
+Your previous plan produced this SQL, which FAILED:
+{previous_sql}
+
+Failure reason: {previous_error or "N/A"}
+Specific fix required: {retry_hint or "Re-examine the plan against the schema and rules above."}
+
+Produce a NEW plan that specifically addresses this failure. Do not repeat the same mistake.
+"""
+    else:
+        retry_context = ""
+
     prompt = ChatPromptTemplate.from_template(PLANNER_PROMPT)
     chain = prompt | llm
 
@@ -271,6 +296,7 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "sample_data": sample_data_text,
         "intent": json.dumps(intent_data, indent=2),
         "decomposition": json.dumps(state.get("decomposition", {}), indent=2),
+        "retry_context": retry_context,
         "dialect": dialect,
         "date_this_month": date_templates["this_month"].replace("{{col}}", "date"),
         "date_last_month": date_templates["last_month"].replace("{{col}}", "date"),
@@ -427,10 +453,19 @@ async def structured_planner_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     plan_json_str = json.dumps(plan, indent=2, ensure_ascii=False)
 
+    # === BUG 3b FIX: Don't reset retry_count here. ===
+    # This used to unconditionally set retry_count=0, which is correct on the
+    # very first call (no state exists yet) but WRONG once retries route back
+    # through this node: it would silently erase typed_error_classifier_node's
+    # count and defeat the 3-attempt cap, letting the graph retry forever.
+    # `state.get("retry_count", 0)` is 0 on first entry (same as before) and
+    # preserves whatever typed_error_classifier_node has already counted on
+    # subsequent entries.
     return {
         **state,
         "schema_context": schema_text,
         "structured_plan": plan,
         "plan_json": plan_json_str,
-        "retry_count": 0,
+        "retry_count": state.get("retry_count", 0),
     }
+

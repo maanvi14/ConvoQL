@@ -315,3 +315,4 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **state,
         "entity_links": resolved,
     }
+
