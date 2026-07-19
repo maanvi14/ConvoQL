@@ -138,8 +138,44 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
 
     date_funcs = DATE_FUNCTIONS.get(dialect, DATE_FUNCTIONS["sqlite"])
 
-    if len(tables) == 1 and tables[0].lower() == "transactions":
-        joins = []
+    # === CRITICAL FIX (Bug 5): Trim SELECT for budgets JOIN queries ===
+    is_budget_query = any("budget" in str(t).lower() for t in tables) or \
+                       any("budget" in str(j.get("right_table", "")).lower() for j in joins)
+    if is_budget_query and group_by:
+        detail_cols_to_drop = {
+            "transactions.date", "transactions.description", "transactions.amount", "transactions.type",
+            "t.date", "t.description", "t.amount", "t.type",
+            "date", "description", "amount", "type"
+        }
+        new_select = []
+        for col in select_cols:
+            if isinstance(col, str):
+                col_clean = col.strip().lower()
+                # Check if it matches any of the detail columns
+                if col_clean in detail_cols_to_drop:
+                    continue
+                # Also check if it's qualified or has alias, but matches the base column
+                base_col = col_clean.split(" as ")[0].strip()
+                # strip potential table qualification for check
+                if "." in base_col:
+                    base_col = base_col.split(".")[-1].strip()
+                if base_col in detail_cols_to_drop:
+                    continue
+                new_select.append(col)
+            else:
+                new_select.append(col)
+        
+        # Ensure transactions.category (or equivalent) is present
+        has_category = any("category" in str(c).lower() for c in new_select)
+        if not has_category:
+            new_select.insert(0, "transactions.category")
+            
+        # Ensure SUM(ABS(transactions.amount)) AS total_spent is present
+        has_aggregate = any(any(agg in str(c).lower() for agg in ["sum", "total_spent"]) for c in new_select)
+        if not has_aggregate:
+            new_select.append("SUM(ABS(transactions.amount)) AS total_spent")
+            
+        select_cols = new_select
 
     select_clause = ", ".join(select_cols)
     from_clause = tables[0]
@@ -151,6 +187,20 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
                 join_type = join["type"]
                 right_table = join["right_table"]
                 on_condition = join.get("on_condition", "")
+
+                # Automatically append month_year alignment for budgets join
+                if right_table.lower() == "budgets" and "month_year" not in on_condition.lower():
+                    if dialect == "mysql":
+                        align_clause = "DATE_FORMAT(budgets.month_year, '%Y-%m') = DATE_FORMAT(transactions.date, '%Y-%m')"
+                    elif dialect == "postgresql":
+                        align_clause = "TO_CHAR(budgets.month_year, 'YYYY-MM') = TO_CHAR(transactions.date, 'YYYY-MM')"
+                    else:  # sqlite
+                        align_clause = "strftime('%Y-%m', budgets.month_year) = strftime('%Y-%m', transactions.date)"
+                    
+                    if on_condition:
+                        on_condition = f"{on_condition} AND {align_clause}"
+                    else:
+                        on_condition = f"transactions.category = budgets.category AND {align_clause}"
 
                 if on_condition:
                     if "categories.category" in on_condition.lower() or "category = category" in on_condition.lower():

@@ -361,6 +361,62 @@ check(
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# BUG 5 — Budget JOIN missing month alignment and detail column pruning
+# ════════════════════════════════════════════════════════════════════════════
+
+print("\n═══ Bug 5: Budget JOIN missing month alignment & select pruning ═══")
+
+plan_5 = {
+    "tables": ["transactions", "budgets"],
+    "joins": [
+        {
+            "type": "INNER JOIN",
+            "right_table": "budgets",
+            "on_condition": "transactions.category = budgets.category"
+        }
+    ],
+    "select_columns": [
+        "transactions.date", "transactions.description", "transactions.amount",
+        "transactions.type", "transactions.category", "budgets.allocated", "budgets.spent",
+        "SUM(ABS(transactions.amount)) AS total_spent"
+    ],
+    "where_filters": ["strftime('%Y-%m', transactions.date) = '2026-05'", "transactions.type = 'debit'"],
+    "group_by": ["transactions.category"],
+    "order_by": "total_spent DESC",
+    "limit": 50
+}
+entity_links_5 = {"linked_columns": [], "linked_tables": [], "linked_values": [], "linked_dates": [], "ambiguous": []}
+intent_5 = {"type_filter": "debit", "original_question": "Compare my budget VS actual spending for May"}
+
+sql_5 = build_sql_from_plan(plan_5, entity_links_5, intent_5, dialect="sqlite")
+
+check(
+    "Budgets JOIN contains month_year alignment in ON clause",
+    "strftime('%Y-%m', budgets.month_year) = strftime('%Y-%m', transactions.date)" in sql_5,
+    f"SQL: {sql_5}"
+)
+
+select_part_lower = sql_5.split("FROM")[0].lower()
+check(
+    "Transactions detail columns (date, description, amount, type) are pruned from SELECT clause",
+    "transactions.date" not in select_part_lower and
+    "transactions.description" not in select_part_lower and
+    "transactions.type" not in select_part_lower and
+    not re.search(r'\btransactions\.amount\b(?!\s*\))', select_part_lower), # must not be bare, but allowed inside SUM(ABS(...))
+    f"SQL: {sql_5}"
+)
+
+check(
+    "Category, allocated, spent, and SUM(ABS(...)) remain in SELECT clause",
+    "transactions.category" in sql_5 and
+    "budgets.allocated" in sql_5 and
+    "budgets.spent" in sql_5 and
+    "SUM(ABS(transactions.amount))" in sql_5,
+    f"SQL: {sql_5}"
+)
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # FINAL REPORT
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -374,6 +430,6 @@ if _failures:
     sys.exit(1)
 else:
     print(f"\033[92m{'═'*60}\033[0m")
-    print(f"\033[92m  All offline assertions PASSED — 4 bug fixes verified.\033[0m")
+    print(f"\033[92m  All offline assertions PASSED — 5 bug fixes verified.\033[0m")
     print(f"\033[92m{'═'*60}\033[0m")
     sys.exit(0)

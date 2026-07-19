@@ -179,9 +179,26 @@ async def run_single_test(category: str, query: str, dialect: str = "sqlite") ->
         # Build clean initial state (TypedDict as dict)
         initial_state = build_initial_state(query, dialect)
 
-        # Invoke graph with proper config
+        # Invoke graph with proper config and 429 retries
         config = {"recursion_limit": 50}
-        final_state = await agent_graph.ainvoke(initial_state, config=config)
+        max_attempts = 5
+        base_backoff = 15
+        final_state = None
+        
+        for attempt in range(max_attempts):
+            try:
+                final_state = await agent_graph.ainvoke(initial_state, config=config)
+                break
+            except Exception as e:
+                err_str = str(e)
+                if any(ind in err_str or ind in repr(e) for ind in ["429", "rate_limit", "Rate limit", "TPM", "RPM"]):
+                    backoff = base_backoff * (2 ** attempt)
+                    print(f"  [Rate Limit] 429 hit. Retrying in {backoff}s... (Attempt {attempt+1}/{max_attempts})")
+                    await asyncio.sleep(backoff)
+                else:
+                    raise e
+        else:
+            raise Exception("Max 429 retry attempts reached.")
 
         # Extract results
         sql = final_state.get("generated_sql", "")
@@ -276,6 +293,9 @@ async def run_tests(tests: List[Tuple[str, str]], dialect: str = "sqlite") -> Li
     results = []
 
     for idx, (category, query) in enumerate(tests, 1):
+        if idx > 1:
+            await asyncio.sleep(5)
+            
         print_subheader(f"[{idx}/{len(tests)}] {category}")
         print(f"  Query: {query}")
 

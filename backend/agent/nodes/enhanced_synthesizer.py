@@ -54,6 +54,7 @@ RULES:
 - No follow-up questions. No "Key Insight". No "Details". Just plain English.
 - IMPORTANT: Debits (expenses) have NEGATIVE amounts in the database. When displaying spending, show the absolute value with ₹.
 - IMPORTANT: Credits (income) have POSITIVE amounts. Display as-is.
+- IMPORTANT: If Total Rows > 1, you are looking at a breakdown across multiple categories/rows, NOT a single total. Never state one row's value as if it were the answer for the whole time period. Summarize the set (e.g. 'You have 5 budgeted categories in May; Travel is closest to its limit at ₹14,000 of ₹15,000 allocated') rather than picking the top row and presenting it as an aggregate.
 
 JSON Response ONLY:"""
 
