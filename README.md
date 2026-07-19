@@ -1,3 +1,11 @@
+---
+title: ConvoQL
+emoji: 💬
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+pinned: false
+---
 # ConvoQL - "Agentic NL-to-SQL Analytics Platform"
 
 ![Next.js](https://img.shields.io/badge/Next.js-14-black)
@@ -102,17 +110,6 @@ ConvoQL supports SQLite, MySQL, and PostgreSQL through a unified database abstra
 | Frontend Deployment | Vercel |
 | Backend Deployment | Hugging Face Spaces, Render |
 
----
-
-## Known Limitations
-
-- **Statistical Anomaly Filtering**: Anomaly queries currently use a standard sorting template (`ORDER BY ABS(amount) DESC LIMIT 50`) for data listing. Statistical Z-Score outlier filtering is performed post-hoc for narrative text generation, rather than inside the primary SQL query.
-- **API Rate-Limiting Retries**: Graph errors resulting from Groq API rate limits (HTTP 429) are caught and automatically retried by the test suite, but a system-wide production-level exponential backoff middle-layer is not yet fully integrated into every individual execution node.
-
----
-title: ConvoQL
-emoji: 💬
-sdk: docker
 ---
 
 
