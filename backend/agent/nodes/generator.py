@@ -1,27 +1,19 @@
 """Generator node: Creates SQL from natural language with dialect awareness.
 
-NOTE: This module is NOT currently wired into the LangGraph pipeline in
-graph.py. The live path goes through structured_planner → sql_skeleton
-instead. This file is preserved as an alternative, LLM-direct SQL generation
-approach that could be wired in as a documented fallback strategy, e.g.:
+WIRED IN as a fallback strategy (graph.py): the main path is still
+structured_planner -> column_linker -> sql_skeleton, but when that
+deterministic pipeline has already failed twice for a question (retry_count
+== 2, i.e. the last attempt before giving up), route_after_error_classification
+in graph.py sends the retry to this node instead of back through
+structured_planner. It takes a different path through the problem
+(single-shot LLM-direct SQL generation against the exact schema, rather than
+plan -> link -> assemble), which sometimes succeeds where repeating the
+structured strategy would just reproduce the same failure a third time.
+Its output (state["generated_sql"]) is validated the same way as the
+structured pipeline's, via the shared validator_node.
 
-    workflow.add_conditional_edges(
-        "typed_error_classifier",
-        route_after_error_classification,
-        {
-            "sql_skeleton": "sql_skeleton",
-            "generator": "generator",          # <-- optional fallback
-            "result_set_validator": "result_set_validator",
-        }
-    )
-
-Do NOT import generator_node into graph.py unless you intend to wire it in.
-Leaving it imported-but-unused would cause an unnecessary ChatGroq
-instantiation on every module load.
-
-Also note: _fix_group_by() in this file only handles the case of a bare
-`date` column missing from GROUP BY. It is only called from generator_node
-(which is currently unreachable), so it has no effect on the live pipeline.
+Note: _fix_group_by() in this file only handles the case of a bare `date`
+column missing from GROUP BY.
 """
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
@@ -559,4 +551,3 @@ async def generator_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "generated_sql": sql,
         "error": None,
     }
-

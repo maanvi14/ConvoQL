@@ -5,10 +5,12 @@ from typing import Dict, Any
 from agent.state import AgentState
 from agent.nodes.intent_classifier import intent_classifier_node
 from agent.nodes.query_decomposer import query_decomposer_node
+from agent.nodes.sub_query_executor import sub_query_executor_node
 from agent.nodes.structured_planner import structured_planner_node
 from agent.nodes.dynamic_few_shot import dynamic_few_shot_node
 from agent.nodes.column_linker import column_linker_node
 from agent.nodes.sql_skeleton import sql_skeleton_node
+from agent.nodes.generator import generator_node
 from agent.nodes.validator import validator_node
 from agent.nodes.typed_error_classifier import typed_error_classifier_node
 from agent.nodes.result_set_validator import result_set_validator_node
@@ -24,6 +26,7 @@ workflow = StateGraph(AgentState)
 # Layer 1: Query Understanding
 workflow.add_node("intent_classifier", intent_classifier_node)
 workflow.add_node("query_decomposer", query_decomposer_node)
+workflow.add_node("sub_query_executor", sub_query_executor_node)
 
 # Layer 2: Schema Retrieval
 workflow.add_node("structured_planner", structured_planner_node)
@@ -32,6 +35,7 @@ workflow.add_node("dynamic_few_shot", dynamic_few_shot_node)
 # Layer 3: Generation
 workflow.add_node("column_linker", column_linker_node)
 workflow.add_node("sql_skeleton", sql_skeleton_node)
+workflow.add_node("generator", generator_node)
 
 # Layer 4: Validation
 workflow.add_node("validator", validator_node)
@@ -48,11 +52,52 @@ workflow.set_entry_point("intent_classifier")
 
 # Layer 1 -> Layer 2
 workflow.add_edge("intent_classifier", "query_decomposer")
-workflow.add_edge("query_decomposer", "structured_planner")
+
+# === CONDITIONAL: Decomposition -> sub-query pipeline or single-query pipeline ===
+# BUG FIX: query_decomposer_node's output (state["decomposition"]) used to be
+# computed and then never read by anything — every question, compound or not,
+# fell through to the single-query pipeline below, so "compare my HDFC
+# spending vs ICICI spending" silently ran as one (usually wrong) query.
+# Compound questions now route to sub_query_executor_node, which runs each
+# sub-question through its own copy of the pipeline and merges the results.
+def route_after_decomposition(state: AgentState) -> str:
+    """Route after decomposition: compound -> sub_query_executor, else -> single-query pipeline."""
+    decomposition = state.get("decomposition", {}) or {}
+    is_compound = decomposition.get("is_compound", False)
+    sub_queries = decomposition.get("sub_queries", [])
+
+    print(f"[Router] is_compound={is_compound}, sub_queries={len(sub_queries)}")
+
+    if is_compound and sub_queries:
+        return "sub_query_executor"
+
+    return "dynamic_few_shot"
+
+workflow.add_conditional_edges(
+    "query_decomposer",
+    route_after_decomposition,
+    {
+        "sub_query_executor": "sub_query_executor",
+        "dynamic_few_shot": "dynamic_few_shot",
+    }
+)
+
+# sub_query_executor already validated and executed each sub-query itself,
+# so it skips straight to synthesis rather than the single-query validator loop.
+workflow.add_edge("sub_query_executor", "enhanced_synthesizer")
+
+# BUG FIX: dynamic_few_shot_node reads state["intent"] (set by intent_classifier,
+# available since the very first node) and writes state["few_shot_examples"].
+# structured_planner_node reads state["few_shot_examples"] into its prompt.
+# The old order (structured_planner -> dynamic_few_shot) ran the planner BEFORE
+# the examples existed, so few_shot_context was always empty on the first pass
+# — the selected examples only became visible on a retry, one full attempt late.
+# dynamic_few_shot only depends on intent, not on decomposition/schema, so it's
+# safe to run it right after query_decomposer and before structured_planner.
+workflow.add_edge("dynamic_few_shot", "structured_planner")
 
 # Layer 2 -> Layer 3
-workflow.add_edge("structured_planner", "dynamic_few_shot")
-workflow.add_edge("dynamic_few_shot", "column_linker")
+workflow.add_edge("structured_planner", "column_linker")
 workflow.add_edge("column_linker", "sql_skeleton")
 
 # Layer 3 -> Layer 4 (Validator)
@@ -98,6 +143,17 @@ def route_after_error_classification(state: AgentState) -> str:
     # with the retry_hint, and the graph's static edges
     # (structured_planner -> dynamic_few_shot -> column_linker -> sql_skeleton)
     # naturally regenerate the whole pipeline from a corrected plan.
+    if retry_count == 2:
+        # The deterministic structured_planner -> column_linker -> sql_skeleton
+        # pipeline has now failed twice with the SAME strategy. Rather than
+        # spend the last retry repeating that strategy a third time, fall back
+        # to generator_node's LLM-direct SQL generation (previously written
+        # but never wired into the graph) for this final attempt — it takes a
+        # different path through the problem and sometimes succeeds where the
+        # structured plan keeps failing the same way.
+        print("[Retry] Falling back to generator_node (LLM-direct strategy) for final attempt.")
+        return "generator"
+
     return "structured_planner"
 
 workflow.add_conditional_edges(
@@ -105,9 +161,14 @@ workflow.add_conditional_edges(
     route_after_error_classification,
     {
         "structured_planner": "structured_planner",
+        "generator": "generator",
         "result_set_validator": "result_set_validator",
     }
 )
+
+# generator_node's SQL goes through the same validator as the structured
+# pipeline's SQL — the validator is generic over state["generated_sql"].
+workflow.add_edge("generator", "validator")
 
 # === CONDITIONAL: Result Set Validation -> Retry or Synthesize ===
 def route_after_result_check(state: AgentState) -> str:

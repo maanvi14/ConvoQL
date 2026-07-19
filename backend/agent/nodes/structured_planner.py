@@ -1,3 +1,4 @@
+
 """Structured planner: Outputs JSON query plan with dialect-aware date functions."""
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
@@ -56,6 +57,7 @@ DETECTED INTENT: {intent}
 
 DECOMPOSITION: {decomposition}
 {retry_context}
+{few_shot_context}
 === CRITICAL AMOUNT SIGN CONVENTION ===
 The `amount` column uses SIGNED values:
   - Debits (expenses, purchases, payments): NEGATIVE values
@@ -287,6 +289,21 @@ Produce a NEW plan that specifically addresses this failure. Do not repeat the s
     else:
         retry_context = ""
 
+    # === DEAD CODE FIX: Actually inject the selected few-shot examples ===
+    # dynamic_few_shot_node computes this and writes it to
+    # state["few_shot_examples"], but nothing ever read it — the planner
+    # prompt had no {few_shot_examples} placeholder at all. Combined with the
+    # graph now running dynamic_few_shot BEFORE this node, the examples are
+    # actually present in state by the time we get here.
+    few_shot_examples = state.get("few_shot_examples")
+    if few_shot_examples:
+        few_shot_context = f"""
+=== RELEVANT EXAMPLES FOR THIS QUERY TYPE ===
+{few_shot_examples}
+"""
+    else:
+        few_shot_context = ""
+
     prompt = ChatPromptTemplate.from_template(PLANNER_PROMPT)
     chain = prompt | llm
 
@@ -297,6 +314,7 @@ Produce a NEW plan that specifically addresses this failure. Do not repeat the s
         "intent": json.dumps(intent_data, indent=2),
         "decomposition": json.dumps(state.get("decomposition", {}), indent=2),
         "retry_context": retry_context,
+        "few_shot_context": few_shot_context,
         "dialect": dialect,
         "date_this_month": date_templates["this_month"].replace("{{col}}", "date"),
         "date_last_month": date_templates["last_month"].replace("{{col}}", "date"),
@@ -468,4 +486,3 @@ Produce a NEW plan that specifically addresses this failure. Do not repeat the s
         "plan_json": plan_json_str,
         "retry_count": state.get("retry_count", 0),
     }
-

@@ -71,7 +71,7 @@ async def synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return state
 
     # Run analytics
-    anomaly = detect_anomalies(result)
+    anomaly = detect_anomalies(result, sql=state["generated_sql"])
     state["anomaly"] = anomaly
 
     chart_type = classify_chart_type(result)

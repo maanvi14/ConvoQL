@@ -1,18 +1,20 @@
 """Intent classifier: Determines query type with deterministic type_filter enforcement."""
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set, Tuple
 import json
 import re
 
 from config import get_settings
+from db.connection import db_manager
 
 settings = get_settings()
 
 # === DETERMINISTIC TYPE FILTER SIGNALS ===
-# These are checked AFTER the LLM to override hallucinations
-# CRITICAL FIX: Removed "shopping" - it's a category name, not an expense signal
-# Category names should NEVER trigger type_filter. Only explicit expense/income verbs should.
+# These are checked AFTER the LLM to override hallucinations. Unlike the
+# JOIN-detection logic below, these are generic English vocabulary for the
+# debit/credit distinction that this app always has (not a per-dataset value
+# list), so they stay as a fixed heuristic set.
 DEBIT_SIGNALS = {
     "expense", "expenses", "spent", "spending", "spend",
     "purchase", "purchased", "purchases",
@@ -26,7 +28,6 @@ DEBIT_SIGNALS = {
     "outgoing", "outflow",
     "expenditure", "outgoings", "outgo", "spendings",
     "bills", "bill"
-    # REMOVED: "shopping" — category name, not expense verb
 }
 
 CREDIT_SIGNALS = {
@@ -43,14 +44,6 @@ CREDIT_SIGNALS = {
     "interest",
     "profit", "profits",
     "gains", "gain"
-}
-
-# Signals that REQUIRE multi-table JOINs
-JOIN_SIGNALS = {
-    "budget", "budgets", "allocated", "over budget", "under budget", "budget vs",
-    "budget limit", "budget utilization", "budget comparison",
-    "account balance", "balances", "total balance", "highest balance",
-    "bank balance", "account metadata"
 }
 
 INTENT_PROMPT = """You are a query intent classifier for a financial text-to-SQL system.
@@ -99,14 +92,12 @@ def _enforce_type_filter(question: str, intent_data: Dict[str, Any]) -> Dict[str
     The LLM often incorrectly infers type_filter from category/tag names.
     """
     q_lower = question.lower()
-    # Extract words, removing punctuation
     words = set(re.findall(r'\b[a-z]+\b', q_lower))
 
     has_debit = bool(DEBIT_SIGNALS & words)
     has_credit = bool(CREDIT_SIGNALS & words)
     current = intent_data.get("type_filter")
 
-    # Case 1: No explicit signals → FORCE null
     if not has_debit and not has_credit:
         if current is not None:
             print(f"[IntentClassifier] OVERRIDING type_filter from '{current}' to null. "
@@ -114,14 +105,12 @@ def _enforce_type_filter(question: str, intent_data: Dict[str, Any]) -> Dict[str
             intent_data["type_filter"] = None
         return intent_data
 
-    # Case 2: Both signals present → null (let query handle both)
     if has_debit and has_credit:
         if current is not None:
             print(f"[IntentClassifier] Both debit and credit signals found. Setting type_filter to null.")
             intent_data["type_filter"] = None
         return intent_data
 
-    # Case 3: Override to correct signal
     if has_debit and current != "debit":
         print(f"[IntentClassifier] Correcting type_filter to 'debit' based on explicit signals: {DEBIT_SIGNALS & words}")
         intent_data["type_filter"] = "debit"
@@ -129,16 +118,59 @@ def _enforce_type_filter(question: str, intent_data: Dict[str, Any]) -> Dict[str
         print(f"[IntentClassifier] Correcting type_filter to 'credit' based on explicit signals: {CREDIT_SIGNALS & words}")
         intent_data["type_filter"] = "credit"
 
-    # === JOIN DETECTION ===
-    # Force requires_join=True for budget/account balance queries
-    has_join_signal = bool(JOIN_SIGNALS & words)
-    if has_join_signal:
-        if not intent_data.get("requires_join", False):
-            print(f"[IntentClassifier] Forcing requires_join=True for multi-table query: {JOIN_SIGNALS & words}")
-            intent_data["requires_join"] = True
-            intent_data["primary_intent"] = "multi_table_join"
-
     return intent_data
+
+
+async def _detect_join_signals(question: str) -> Tuple[bool, Set[str]]:
+    """Determine whether the question likely needs a multi-table JOIN by
+    inspecting the LIVE schema, instead of a hardcoded phrase/table list
+    (the old JOIN_SIGNALS set literally hardcoded "budget", "account
+    balance", etc. — which only worked for this one app's table names and
+    would silently miss/misfire on any other schema).
+
+    Heuristic: the "primary" table is the one with the most columns (usually
+    the main transactions-style ledger). Any OTHER table is a JOIN candidate.
+    If the question mentions that table's name (or its singular form), or
+    references one of its columns that ISN'T also a column on the primary
+    table (so we don't false-positive on shared column names like
+    'category'), we flag requires_join=True.
+    """
+    try:
+        schema = await db_manager.get_schema()
+    except Exception as e:
+        print(f"[IntentClassifier] Could not load schema for join detection: {e}")
+        return False, set()
+
+    tables = schema.get("tables", [])
+    if len(tables) <= 1:
+        return False, set()
+
+    primary = max(tables, key=lambda t: len(t.get("columns", [])))
+    primary_cols = {c["name"].lower() for c in primary.get("columns", [])}
+
+    q_lower = question.lower()
+    hits: Set[str] = set()
+
+    for table in tables:
+        table_name_lower = table["name"].lower()
+        if table_name_lower == primary["name"].lower():
+            continue
+
+        singular = table_name_lower[:-1] if table_name_lower.endswith("s") else table_name_lower
+
+        if table_name_lower in q_lower or (singular and singular in q_lower):
+            hits.add(table_name_lower)
+            continue
+
+        for col in table.get("columns", []):
+            col_lower = col["name"].lower()
+            if col_lower in primary_cols:
+                continue  # shared column name — not a strong join signal
+            spaced = col_lower.replace("_", " ")
+            if col_lower in q_lower or spaced in q_lower:
+                hits.add(f"{table_name_lower}.{col_lower}")
+
+    return bool(hits), hits
 
 
 async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -162,7 +194,6 @@ async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         intent_data = json.loads(content)
 
-        # Validate required fields
         intent_data.setdefault("primary_intent", "filter_lookup")
         intent_data.setdefault("secondary_intents", [])
         intent_data.setdefault("confidence", 0.5)
@@ -172,7 +203,7 @@ async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
         intent_data.setdefault("type_filter", None)
         intent_data.setdefault("entities", [])
 
-        # === CRITICAL FIX: Enforce type_filter rules deterministically ===
+        # === Enforce type_filter rules deterministically ===
         intent_data = _enforce_type_filter(state["question"], intent_data)
 
     except Exception as e:
@@ -187,6 +218,14 @@ async def intent_classifier_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "type_filter": None,
             "entities": [],
         }
+
+    # === Schema-driven JOIN detection (replaces hardcoded JOIN_SIGNALS) ===
+    has_join_signal, join_hits = await _detect_join_signals(state["question"])
+    if has_join_signal and not intent_data.get("requires_join", False):
+        print(f"[IntentClassifier] Forcing requires_join=True based on schema signals: {join_hits}")
+        intent_data["requires_join"] = True
+        if intent_data.get("primary_intent") not in {"multi_table_join", "budget_compare"}:
+            intent_data["primary_intent"] = "multi_table_join"
 
     return {
         **state,

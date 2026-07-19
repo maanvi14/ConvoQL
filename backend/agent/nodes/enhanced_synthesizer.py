@@ -55,6 +55,7 @@ RULES:
 - IMPORTANT: Debits (expenses) have NEGATIVE amounts in the database. When displaying spending, show the absolute value with ₹.
 - IMPORTANT: Credits (income) have POSITIVE amounts. Display as-is.
 - IMPORTANT: If Total Rows > 1, you are looking at a breakdown across multiple categories/rows, NOT a single total. Never state one row's value as if it were the answer for the whole time period. Summarize the set (e.g. 'You have 5 budgeted categories in May; Travel is closest to its limit at ₹14,000 of ₹15,000 allocated') rather than picking the top row and presenting it as an aggregate.
+- IMPORTANT: If rows contain a "sub_query" field, this question was split into multiple parts (e.g. "compare X vs Y") and the rows are the merged results of each part. Group your answer by "sub_query" so each part of the comparison gets addressed, rather than treating all rows as one undifferentiated set.
 
 JSON Response ONLY:"""
 
@@ -210,7 +211,7 @@ async def enhanced_synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     analysis_context = "spending" if is_spending_query else ("income" if is_income_query else "all")
 
     # Pass context to anomaly detector and chart classifier
-    anomaly = detect_anomalies(result, context=analysis_context)
+    anomaly = detect_anomalies(result, context=analysis_context, sql=state["generated_sql"])
     chart_type = classify_chart_type(result, context=analysis_context)
 
     rows = result.get("rows", [])
@@ -272,5 +273,3 @@ async def enhanced_synthesizer_node(state: Dict[str, Any]) -> Dict[str, Any]:
     state["row_count"] = total_rows
 
     return state
-
-

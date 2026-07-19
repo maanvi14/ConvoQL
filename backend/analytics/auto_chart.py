@@ -36,11 +36,19 @@ def classify_chart_type(result: Dict[str, Any], context: str = "all") -> Optiona
             categorical_cols.append(c)
 
     # Check for numeric columns (excluding IDs)
+    # NOTE: keyword list extended to cover budget-comparison column names
+    # (e.g. "budget", "allocated", "pct_used" from the budget_compare
+    # few-shot example in dynamic_few_shot.py) — those results used to find
+    # zero numeric columns for the "budget"/"pct_used" fields and fall back
+    # to a worse chart choice even though this is a named, common intent.
     numeric_cols = []
     for c in columns:
         if any(w in c.lower() for w in ["id", "_id"]):
             continue
-        if any(w in c.lower() for w in ["amount", "total", "sum", "count", "spent", "income", "value", "avg", "mean"]):
+        if any(w in c.lower() for w in [
+            "amount", "total", "sum", "count", "spent", "income", "value", "avg", "mean",
+            "budget", "allocated", "balance", "limit", "pct", "percent", "ratio", "rate",
+        ]):
             numeric_cols.append(c)
 
     # Determine chart type
@@ -52,7 +60,7 @@ def classify_chart_type(result: Dict[str, Any], context: str = "all") -> Optiona
             return "pie"
         return "bar"
 
-    if len(rows) > 1:
-        return "table"
-
-    return None
+    # By this point rows is non-empty (checked above) and len(rows) != 1
+    # (checked above), so this is always > 1 — kept as "table" default
+    # rather than falling through to an implicit None.
+    return "table"

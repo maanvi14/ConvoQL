@@ -43,9 +43,15 @@ class SchemaRAG:
         ])
 
         needs_accounts = any(w in question_lower for w in [
+            # NOTE: this used to also hardcode "hdfc", "icici", "paytm" —
+            # literal bank names specific to one dataset. Any deployment
+            # with different bank/account names would silently fail to
+            # trigger the accounts table boost. Generic account/balance
+            # vocabulary below is dataset-agnostic; actual account NAME
+            # matching against real data happens in column_linker.py, which
+            # queries the live distinct account values instead of guessing.
             "account", "accounts", "balance", "balances", "bank", "bank balance",
-            "total balance", "highest balance", "account metadata", "all accounts",
-            "hdfc", "icici", "paytm"
+            "total balance", "highest balance", "account metadata", "all accounts"
         ])
 
         needs_categories = any(w in question_lower for w in [
@@ -161,3 +167,4 @@ class SchemaRAG:
 
 # Global instance
 schema_rag = SchemaRAG()
+

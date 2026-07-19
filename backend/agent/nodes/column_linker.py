@@ -1,40 +1,113 @@
-"""Column linker: Resolves entities in question to actual schema columns."""
+"""Column linker: Resolves entities in question to actual schema columns.
+
+SCHEMA/DATA-DRIVEN REWRITE
+---------------------------
+The previous version hardcoded per-dataset value lists: specific bank names
+("hdfc", "icici", "paytm"), specific merchants ("zomato", "swiggy", ...),
+specific categories, and a static ENTITY_SYNONYMS dict mapping phrases like
+"hdfc account" -> "HDFC". None of that generalizes beyond the one dataset it
+was written against — a new deployment with different banks/merchants/
+categories would silently link nothing.
+
+This version instead asks the *live database* what values actually exist in
+account/category/merchant/payment_method-shaped columns (found dynamically
+from the schema, not by hardcoded table/column name guesses beyond the role
+mapping below) and matches the question against those real values. Table
+references are still detected from schema table names, plus a fuzzy fallback
+via schema_rag for phrasing that doesn't literally contain the table name.
+"""
 from typing import Dict, Any, List
 import re
+import time
 
 from db.connection import db_manager
 from cache.schema_rag import schema_rag
 
-# Entity synonyms for fuzzy matching
-ENTITY_SYNONYMS = {
-    # Account names
-    "hdfc account": "HDFC",
-    "hdfc bank": "HDFC",
-    "icici account": "ICICI",
-    "icici bank": "ICICI",
-    "paytm account": "Paytm",
-    "paytm wallet": "Paytm",
-
-    # Category names
-    "investment returns": "Investment",
-    "returns": "Investment",
-    "salary": "Income",
-    "freelance": "Side Income",
-
-    # Payment methods
-    "upi transactions": "UPI",
-    "cash payment": "Cash",
-    "card payment": "Card",
-
-    # Table aliases
-    "account balance": "accounts",
-    "account balances": "accounts",
-    "budget limit": "budgets",
-    "budget vs actual": "budgets",
+# Column *roles* we know how to link against real data. This maps a semantic
+# role to the column name(s) that typically hold it — NOT to any specific
+# value. The actual values (bank names, merchants, categories, etc.) are
+# always read live from the database, never hardcoded here.
+ENTITY_COLUMN_ROLES = {
+    "account": ["account", "account_name"],
+    "category": ["category"],
+    "merchant": ["merchant"],
+    "payment_method": ["payment_method"],
 }
+
+# Generic phrase suffixes used to detect "<value> account/bank/wallet/card"
+# style mentions so we can strip the suffix and match the bare value against
+# real account values, without hardcoding which accounts exist.
+ACCOUNT_PHRASE_SUFFIXES = ["account", "bank", "wallet", "card"]
+
+# Generic phrase suffixes used to detect "<value> table" style mentions,
+# e.g. "budget limit" / "account balance" -> used only as a fuzzy-match hint,
+# not a fixed table mapping.
+TABLE_PHRASE_HINTS = ["balance", "balances", "limit", "vs actual", "utilization"]
 
 # Words to strip from entity mentions before matching
 STRIP_WORDS = ["account", "transactions", "spending", "expenses", "income", "payment"]
+
+# In-memory cache of distinct column values, refreshed periodically so we
+# aren't hitting the DB on every single question.
+_VALUE_CACHE: Dict[str, Dict[str, Any]] = {}
+_VALUE_CACHE_TTL_SECONDS = 300
+_MAX_DISTINCT_VALUES = 500
+
+
+async def _get_distinct_values(table: str, column: str) -> List[str]:
+    """Fetch (and cache) the distinct string values actually present in a
+    column. This is what makes entity linking schema/data-driven: whatever
+    accounts, categories, merchants, or payment methods actually exist in
+    THIS deployment's data are what gets linked — not a fixed guess list."""
+    cache_key = f"{table}.{column}".lower()
+    cached = _VALUE_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and (now - cached["ts"]) < _VALUE_CACHE_TTL_SECONDS:
+        return cached["values"]
+
+    values: List[str] = cached["values"] if cached else []
+    try:
+        result = await db_manager.execute_readonly(
+            f"SELECT DISTINCT {column} FROM {table} "
+            f"WHERE {column} IS NOT NULL LIMIT {_MAX_DISTINCT_VALUES}"
+        )
+        fetched = []
+        for row in result.get("rows", []):
+            v = row.get(column)
+            if isinstance(v, str) and v.strip():
+                fetched.append(v.strip())
+        values = fetched
+    except Exception as e:
+        print(f"[ColumnLinker] Could not fetch distinct values for {cache_key}: {e}")
+
+    _VALUE_CACHE[cache_key] = {"values": values, "ts": now}
+    return values
+
+
+def _find_value_matches(question: str, values: List[str]) -> List[str]:
+    """Return distinct values actually mentioned in the question, matched
+    case-insensitively on word boundaries. Longest values are checked first
+    so e.g. 'Apollo Pharmacy' matches whole rather than partially."""
+    matches = []
+    for value in sorted(set(values), key=len, reverse=True):
+        pattern = r'\b' + re.escape(value.lower()) + r'\b'
+        if re.search(pattern, question):
+            matches.append(value)
+    return matches
+
+
+def _extract_account_phrase_candidates(question: str) -> List[str]:
+    """Find '<word(s)> account/bank/wallet/card' style mentions and return the
+    bare candidate strings (e.g. 'hdfc' from 'hdfc account') so they can be
+    matched against real account values instead of a hardcoded mapping."""
+    candidates = []
+    for suffix in ACCOUNT_PHRASE_SUFFIXES:
+        for m in re.finditer(rf'\b([a-zA-Z][a-zA-Z ]{{1,20}}?)\s+{suffix}s?\b', question):
+            candidate = m.group(1).strip()
+            if candidate and candidate not in STRIP_WORDS:
+                candidates.append(candidate)
+    return candidates
+
 
 async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Link entities from the question to actual database columns and values."""
@@ -44,9 +117,6 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Build column registry
     column_registry = {}
     table_registry = {}
-
-    # Also track actual values in tables for better entity linking
-    value_registry = {}
 
     for table in schema.get("tables", []):
         table_name = table["name"].lower()
@@ -62,7 +132,6 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 "type": col.get("type", "TEXT"),
             })
 
-    # Extract potential entities
     entities = {
         "columns": [],
         "tables": [],
@@ -70,123 +139,71 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "date_references": [],
     }
 
-    # === IMPROVED TABLE DETECTION ===
-    # Check for table mentions (exact + synonyms)
+    # === TABLE DETECTION (schema-driven, with fuzzy fallback) ===
     for table_name, actual_name in table_registry.items():
         if table_name in question:
             entities["tables"].append(actual_name)
 
-    # Check synonym mappings
-    for synonym, target in ENTITY_SYNONYMS.items():
-        if synonym in question:
-            if target.lower() in table_registry:
-                entities["tables"].append(table_registry[target.lower()])
-            else:
-                # It's a value, not a table name
-                entities["values"].append({
-                    "type": "exact_match",
-                    "value": target,
-                    "column": "account",  # Default column for account names
-                })
+    # Fuzzy fallback: phrases like "budget limit" or "account balance" don't
+    # literally contain a table name. Use schema_rag's relevance ranking
+    # (already schema-driven) instead of a hardcoded phrase->table dict.
+    if not entities["tables"] and any(hint in question for hint in TABLE_PHRASE_HINTS):
+        try:
+            relevant = schema_rag.retrieve_relevant(state["question"], top_k=1)
+            if relevant and relevant[0].get("score", 0) > 0.3:
+                entities["tables"].append(relevant[0]["name"])
+        except Exception as e:
+            print(f"[ColumnLinker] schema_rag fallback failed: {e}")
 
-    # === IMPROVED COLUMN DETECTION ===
+    # === COLUMN DETECTION ===
     for col_name, refs in column_registry.items():
         if col_name in question:
             entities["columns"].extend(refs)
 
-    # === SMART VALUE EXTRACTION ===
+    # === DATA-DRIVEN VALUE EXTRACTION ===
+    # Instead of hardcoded value lists per role, walk the live schema for
+    # columns matching a known role and match the question against whatever
+    # values actually exist in the database for that column.
+    for table in schema.get("tables", []):
+        table_name = table["name"]
+        for col in table.get("columns", []):
+            col_name_lower = col["name"].lower()
+            role = None
+            for r, names in ENTITY_COLUMN_ROLES.items():
+                if col_name_lower in names:
+                    role = r
+                    break
+            if role is None:
+                continue
 
-    # Extract account names mentioned in question
-    # CRITICAL FIX: Only extract actual bank names, not category names like "Side Income"
-    account_names = ["hdfc", "icici", "paytm"]
-    for acc in account_names:
-        pattern = rf'\b{acc}\b'
-        if re.search(pattern, question, re.IGNORECASE):
-            # Check if it's followed by "account" or "transactions" or "balance"
-            if re.search(rf'\b{acc}\s+(account|transactions|balance)\b', question, re.IGNORECASE):
+            values = await _get_distinct_values(table_name, col["name"])
+            if not values:
+                continue
+
+            matched = _find_value_matches(question, values)
+
+            # For accounts specifically, also try "<x> account/bank/wallet"
+            # style phrasing against the same real value list, in case the
+            # exact stored value differs slightly in case/spacing from what
+            # the user typed (e.g. user says "hdfc", stored value is "HDFC").
+            if role == "account" and not matched:
+                for candidate in _extract_account_phrase_candidates(question):
+                    for v in values:
+                        if candidate.lower() == v.lower() or candidate.lower() in v.lower():
+                            matched.append(v)
+
+            for v in matched:
                 entities["values"].append({
-                    "type": "account",
-                    "value": acc.upper(),
-                    "column": "account",
+                    "type": role,
+                    "value": v,
+                    "column": col["name"],
                 })
 
-    # Extract merchant names
-    merchant_names = ["amazon", "netflix", "uber", "zomato", "swiggy", "flipkart", 
-                      "apollo pharmacy", "big bazaar", "dmart", "reliance fresh",
-                      "make my trip", "makemytrip", "booking.com", "croma",
-                      "apple store", "indian oil", "bharat petroleum", "gold gym",
-                      "pvr cinemas", "taj restaurant", "social restaurant"]
-    for merchant in merchant_names:
-        if merchant in question:
-            normalized = merchant.title()
-            if merchant == "apollo pharmacy":
-                normalized = "Apollo Pharmacy"
-            elif merchant == "big bazaar":
-                normalized = "Big Bazaar"
-            elif merchant == "reliance fresh":
-                normalized = "Reliance Fresh"
-            elif merchant in ["make my trip", "makemytrip"]:
-                normalized = "MakeMyTrip"
-            elif merchant == "booking.com":
-                normalized = "Booking.com"
-            elif merchant == "apple store":
-                normalized = "Apple Store"
-            elif merchant == "indian oil":
-                normalized = "Indian Oil"
-            elif merchant == "bharat petroleum":
-                normalized = "Bharat Petroleum"
-            elif merchant == "gold gym":
-                normalized = "Gold Gym"
-            elif merchant == "pvr cinemas":
-                normalized = "PVR Cinemas"
-            elif merchant == "taj restaurant":
-                normalized = "Taj Restaurant"
-            elif merchant == "social restaurant":
-                normalized = "Social Restaurant"
-
-            entities["values"].append({
-                "type": "merchant",
-                "value": normalized,
-                "column": "merchant",
-            })
-
-    # Extract category names
-    # CRITICAL FIX: "Cash" and "UPI" should be payment methods, not categories
-    # Only extract as category if NOT preceded by payment method words
-    category_names = ["groceries", "shopping", "entertainment", "transport", 
-                      "food", "health", "fitness", "travel", "utilities",
-                      "housing", "income", "side income", "investment"]
-    # REMOVED "cash" from category_names - it's a payment method
-    for cat in category_names:
-        pattern = rf'\b{re.escape(cat)}\b'
-        if re.search(pattern, question, re.IGNORECASE):
-            entities["values"].append({
-                "type": "category",
-                "value": cat.title(),
-                "column": "category",
-            })
-
-    # CRITICAL FIX: Extract payment methods separately
-    payment_method_names = ["upi", "cash", "card", "netbanking", "net banking"]
-    for pm in payment_method_names:
-        pattern = rf'\b{re.escape(pm)}\b'
-        if re.search(pattern, question, re.IGNORECASE):
-            # Normalize payment method name
-            normalized = pm.title()
-            if pm == "netbanking" or pm == "net banking":
-                normalized = "NetBanking"
-            entities["values"].append({
-                "type": "payment_method",
-                "value": normalized,
-                "column": "payment_method",
-            })
-
     # ============================================================================
-    # FIX: Extract tag values from questions like "tagged with 'subscription'"
-    # CRITICAL FIX: Use double-quoted raw strings to avoid SyntaxError with single quotes
+    # Tag value extraction from questions like "tagged with 'subscription'"
+    # Structural parsing, not dataset-specific — kept as-is.
     # ============================================================================
     tag_patterns = [
-        # Double-quoted raw strings - safe for regexes containing single quotes
         r"tagged\s+(?:with\s+)?['\"]([^'\"]+)['\"]",
         r"tag\s+(?:is\s+)?['\"]([^'\"]+)['\"]",
         r"tags?\s+(?:like|containing|with)\s+['\"]([^'\"]+)['\"]",
@@ -199,16 +216,13 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 "type": "tag",
                 "value": match.strip(),
                 "column": "tags",
-                "operator": "LIKE",  # Signal to generator that this needs LIKE %value%
+                "operator": "LIKE",
             })
 
     # Also catch "tagged with subscription" (no quotes)
-    # FIXED: Pattern requires "tagged with " prefix, captures the word after it
-    # Excludes common words like "with" from being captured as tag values
     tag_bare_pattern = r"tagged\s+with\s+([a-zA-Z_][a-zA-Z0-9_]*)"
     bare_tag_matches = re.findall(tag_bare_pattern, question, re.IGNORECASE)
     for match in bare_tag_matches:
-        # Avoid false positives on common words
         if match.lower() not in {"the", "a", "an", "my", "your", "all", "any", "some", "with"}:
             entities["values"].append({
                 "type": "tag",
@@ -217,7 +231,7 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 "operator": "LIKE",
             })
 
-    # Date extraction
+    # Date extraction — structural, not dataset-specific
     month_names = {
         'january': '01', 'february': '02', 'march': '03', 'april': '04',
         'may': '05', 'june': '06', 'july': '07', 'august': '08',
@@ -261,27 +275,18 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     "match": match if isinstance(match, str) else " ".join(match),
                 })
 
-    # Value extraction (amounts)
-    # CRITICAL FIX: Skip small numbers (likely LIMIT values like "top 5")
-    # Only extract amounts that look like currency values (>= 100 or have decimal)
-    # BUG 2 FIX: Also skip bare 4-digit year numbers (e.g. 2026 in "May 2026")
-    # unless they were explicitly preceded by a currency marker.
+    # Amount extraction — structural, not dataset-specific
     amount_pattern = r'\b((?:rs\.?\s*|₹\s*|inr\s*)?\d+(?:,\d{3})*(?:\.\d{2})?)\b'
     for full_match in re.finditer(amount_pattern, question, re.IGNORECASE):
         full_token = full_match.group(1)
-        # Determine whether a currency prefix is present in this token
         has_currency_prefix = bool(re.match(r'^(?:rs\.?\s*|₹\s*|inr\s*)', full_token, re.IGNORECASE))
-        # Strip any currency prefix to get the raw number string
         digits_only = re.sub(r'^(?:rs\.?\s*|₹\s*|inr\s*)', '', full_token, flags=re.IGNORECASE).strip()
         clean = digits_only.replace(",", "")
         try:
             val = float(clean)
-            # Skip bare 4-digit calendar years (1900-2099) with no currency marker
             if not has_currency_prefix and re.fullmatch(r'(19|20)\d{2}', clean):
                 print(f"[ColumnLinker] Skipping year-like number '{clean}' (not a currency amount)")
                 continue
-            # Skip small integers that are likely LIMIT values (1-20)
-            # But keep them if they have decimal places (likely amounts)
             if '.' in digits_only or val >= 100 or val <= 0:
                 entities["values"].append({"type": "amount", "value": clean, "column": "amount"})
             else:
@@ -298,7 +303,6 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "ambiguous": [],
     }
 
-    # Flag ambiguous column references
     seen_cols = {}
     for col_ref in entities["columns"]:
         col_name = col_ref["column"].lower()
@@ -315,4 +319,3 @@ async def column_linker_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **state,
         "entity_links": resolved,
     }
-

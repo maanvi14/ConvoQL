@@ -4,6 +4,12 @@ import re
 
 from db.connection import db_manager
 
+# VERSION MARKER: if this line does NOT appear in your server's STARTUP logs
+# (not per-request — once, at process boot), the running process imported a
+# stale/cached copy of this module rather than this file. Restart the actual
+# server process (not just save-the-file) to pick it up.
+print("[sql_skeleton.py] LOADED — BUG5_HARDENED_V2 (month_year alignment + group-by integrity fix)")
+
 DATE_FUNCTIONS = {
     "sqlite": {
         "this_month": "strftime('%Y-%m', {col}) = strftime('%Y-%m', 'now')",
@@ -83,20 +89,78 @@ def _fix_hallucinated_columns(sql: str) -> str:
 
 
 def _enforce_abs_for_debits(sql: str, intent: Dict[str, Any]) -> str:
-    """CRITICAL: Ensure ABS(amount) is used for debit/spending queries in skeleton SQL."""
+    """Ensure ABS() is applied to the amount column for debit/spending queries.
+
+    HARDENING: the original implementation only matched exact literal
+    substrings like 'SUM(amount)' and 'ORDER BY amount DESC'. It silently did
+    nothing if the LLM used a table-qualified column
+    ('SUM(transactions.amount)') or an alias ('amount AS abs_amount' +
+    'ORDER BY abs_amount DESC') — both are common, valid LLM outputs that the
+    original regex simply couldn't see. This version:
+      1. Matches amount refs with an optional table qualifier
+         (amount | t.amount | transactions.amount), not just bare 'amount'.
+      2. Resolves ORDER BY aliases back to their SELECT definition to decide
+         whether they need ABS() too, instead of only matching the literal
+         token 'amount' immediately after ORDER BY.
+    """
     type_filter = intent.get("type_filter") if intent else None
     sql_lower = sql.lower()
 
-    is_debit_query = (type_filter == "debit" or 
-                      "type = 'debit'" in sql_lower or 
+    is_debit_query = (type_filter == "debit" or
+                      "type = 'debit'" in sql_lower or
                       'type="debit"' in sql_lower)
 
-    if is_debit_query:
-        sql = re.sub(r'(?i)SUM\s*\(\s*amount\s*\)', 'SUM(ABS(amount))', sql)
-        sql = re.sub(r'(?i)ORDER\s+BY\s+amount\s+DESC', 'ORDER BY ABS(amount) DESC', sql)
-        sql = re.sub(r'(?i)ORDER\s+BY\s+amount\s+ASC', 'ORDER BY ABS(amount) ASC', sql)
-        sql = re.sub(r'(?i)MAX\s*\(\s*amount\s*\)', 'MAX(ABS(amount))', sql)
-        sql = re.sub(r'(?i)AVG\s*\(\s*amount\s*\)', 'AVG(ABS(amount))', sql)
+    if not is_debit_query:
+        return sql
+
+    # --- Step 1: wrap aggregate(amount) / aggregate(table.amount) in ABS() ---
+    for func in ("SUM", "MAX", "AVG", "MIN"):
+        pattern = re.compile(rf'(?i)\b{func}\s*\(\s*((?:\w+\.)?amount)\s*\)')
+        sql = pattern.sub(lambda m, f=func: f"{f}(ABS({m.group(1)}))", sql)
+
+    # --- Step 2: figure out which SELECT aliases resolve to a raw
+    # (non-aggregated, non-ABS'd) amount reference, so ORDER BY can be fixed
+    # even when it references the alias rather than the column directly. ---
+    select_match = re.search(r'(?i)SELECT\s+(.*?)\s+FROM\b', sql, re.DOTALL)
+    alias_needs_abs = set()
+    if select_match:
+        for item in select_match.group(1).split(","):
+            item = item.strip()
+            m = re.match(r'(?is)^(.*)\s+AS\s+(\w+)$', item)
+            if m:
+                expr, alias = m.group(1).strip(), m.group(2).strip()
+                expr_lower = expr.lower()
+                if re.fullmatch(r'(?:\w+\.)?amount', expr_lower):
+                    alias_needs_abs.add(alias.lower())
+
+    # --- Step 3: fix ORDER BY, resolving aliases from step 2 ---
+    order_match = re.search(r'(?i)ORDER\s+BY\s+(.*?)(?=\bLIMIT\b|$)', sql, re.DOTALL)
+    if order_match:
+        terms = []
+        changed = False
+        for term in order_match.group(1).split(","):
+            term_stripped = term.strip()
+            tm = re.match(r'(?i)^(.*?)(\s+(?:ASC|DESC))?$', term_stripped)
+            expr = tm.group(1).strip()
+            direction = tm.group(2) or ""
+            expr_lower = expr.lower()
+
+            if "abs(" in expr_lower:
+                terms.append(term_stripped)
+                continue
+
+            if re.fullmatch(r'(?:\w+\.)?amount', expr_lower):
+                terms.append(f"ABS({expr}){direction}")
+                changed = True
+            elif expr_lower in alias_needs_abs:
+                terms.append(f"ABS({expr}){direction}")
+                changed = True
+            else:
+                terms.append(term_stripped)
+
+        if changed:
+            new_order_clause = ", ".join(terms)
+            sql = sql[:order_match.start(1)] + new_order_clause + sql[order_match.end(1):]
 
     return sql
 
@@ -283,6 +347,7 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
 
                 # Automatically append month_year alignment for budgets join
                 if right_table_base == "budgets" and "month_year" not in on_condition.lower():
+                    print(f"[sql_skeleton] BUG5_HARDENED_V2 firing: injecting month_year alignment for right_table='{right_table}'")
                     if dialect == "mysql":
                         align_clause = "DATE_FORMAT(budgets.month_year, '%Y-%m') = DATE_FORMAT(transactions.date, '%Y-%m')"
                     elif dialect == "postgresql":

@@ -3,7 +3,7 @@ import numpy as np
 from typing import Dict, Any, Optional
 
 
-def detect_anomalies(result: Dict[str, Any], threshold: float = 2.5, context: str = "all") -> Optional[str]:
+def detect_anomalies(result: Dict[str, Any], threshold: float = 2.5, context: str = "all", sql: str = "") -> Optional[str]:
     """
     Detect anomalies in transaction data with proper sign handling.
 
@@ -11,6 +11,13 @@ def detect_anomalies(result: Dict[str, Any], threshold: float = 2.5, context: st
         result: SQL query result with rows and columns
         threshold: Z-score threshold for anomaly detection (default 2.5)
         context: "spending", "income", or "all" — determines how to interpret amounts
+        sql: the SQL that produced `result`, used to refine context when the
+            caller passes context="all". BUG FIX: this used to be read from
+            result.get("sql", ""), but `result` is always the raw dict
+            returned by db_manager.execute_readonly() (rows/columns/
+            executionTime only) — it never has a "sql" key, so that lookup
+            was silently always "" and this whole inference branch was dead
+            code. Callers now pass the actual SQL string explicitly.
 
     Returns:
         String description of anomalies found, or None
@@ -40,7 +47,7 @@ def detect_anomalies(result: Dict[str, Any], threshold: float = 2.5, context: st
         return None
 
     # Determine context from SQL if not explicitly provided
-    sql_str = str(result.get("sql", "")).lower()
+    sql_str = (sql or str(result.get("sql", ""))).lower()
     if context == "all":
         if "debit" in sql_str or "abs(amount)" in sql_str or "total_spent" in sql_str:
             context = "spending"
@@ -65,12 +72,29 @@ def detect_anomalies(result: Dict[str, Any], threshold: float = 2.5, context: st
 
         txn_type = str(row.get("type", "")).lower() if has_type_col else ""
 
-        if txn_type == "debit" or (context == "spending" and val < 0):
-            debit_rows.append((row, abs(val)))  # Store absolute for analysis
-        elif txn_type == "credit" or (context == "income" and val > 0):
-            credit_rows.append((row, val))  # Keep positive for income
+        if txn_type == "debit":
+            debit_rows.append((row, abs(val)))
+        elif txn_type == "credit":
+            credit_rows.append((row, val))
+        elif context == "spending":
+            # BUG FIX: grouped/aggregated spending queries (e.g. "spending by
+            # category" -> SUM(ABS(amount)) AS total_spent GROUP BY category)
+            # have no 'type' column and the values are already positive
+            # (post-ABS). The old check `context == "spending" and val < 0`
+            # never matched these rows, so every row fell into
+            # ambiguous_rows, and the ambiguous-population check only runs
+            # when context == "all" — so anomaly detection silently found
+            # nothing for one of the most common query shapes in this app.
+            # The caller already told us this is a spending population via
+            # `context`, regardless of the row's raw sign, so trust it.
+            debit_rows.append((row, abs(val)))
+        elif context == "income":
+            credit_rows.append((row, val))
+        elif val < 0:
+            debit_rows.append((row, abs(val)))
+        elif val > 0:
+            credit_rows.append((row, val))
         else:
-            # Ambiguous — use absolute value for anomaly detection
             ambiguous_rows.append((row, abs(val)))
 
     # Analyze each population separately

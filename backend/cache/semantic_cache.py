@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any, List, Tuple
 import numpy as np
 import json
 import time
+import asyncio
 
 # Try to use sentence-transformers, fallback to keyword matching
 try:
@@ -41,7 +42,8 @@ class SemanticCache:
             print("[SemanticCache] sentence-transformers not available, using keyword fallback")
 
     def _compute_embedding(self, text: str) -> Optional[np.ndarray]:
-        """Compute embedding vector for a text."""
+        """Compute embedding vector for a text. Synchronous/CPU-bound — call
+        via _compute_embedding_async from async code, never directly."""
         if self.model is None:
             return None
         try:
@@ -49,6 +51,23 @@ class SemanticCache:
         except Exception as e:
             print(f"[SemanticCache] Embedding failed: {e}")
             return None
+
+    async def _compute_embedding_async(self, text: str) -> Optional[np.ndarray]:
+        """Async wrapper around _compute_embedding.
+
+        BUG FIX: get()/set() are async (they're called from an async
+        LangGraph node pipeline serving concurrent requests), but this used
+        to call self.model.encode() directly and synchronously inline.
+        SentenceTransformer.encode() is CPU-bound and can take tens to
+        hundreds of milliseconds per call — running it un-awaited inside an
+        async function blocks the entire event loop for that duration,
+        stalling every other in-flight request on the server, not just this
+        one. Offloading it to a thread via asyncio.to_thread lets the event
+        loop keep serving other coroutines while the embedding computes.
+        """
+        if self.model is None:
+            return None
+        return await asyncio.to_thread(self._compute_embedding, text)
 
     def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """Compute cosine similarity between two vectors."""
@@ -117,7 +136,7 @@ class SemanticCache:
 
         # 2. Semantic similarity check (if embeddings available)
         if self.model is not None:
-            query_vec = self._compute_embedding(question)
+            query_vec = await self._compute_embedding_async(question)
             if query_vec is not None:
                 best_match = None
                 best_score = 0.0
@@ -191,7 +210,7 @@ class SemanticCache:
         # Compute embedding if model available
         embedding = None
         if self.model is not None:
-            embedding = self._compute_embedding(question)
+            embedding = await self._compute_embedding_async(question)
 
         self._cache[question] = {
             "data": data,
@@ -240,3 +259,4 @@ class SemanticCache:
 
 # Singleton instance
 semantic_cache = SemanticCache()
+
