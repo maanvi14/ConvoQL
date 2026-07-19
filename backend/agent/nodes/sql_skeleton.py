@@ -126,6 +126,73 @@ def _sanitize_group_by(sql: str, group_by: List[str]) -> str:
     return sql
 
 
+def _normalize_col_for_compare(col: str) -> str:
+    """Strip alias/table-prefix so 'transactions.date AS d' and 'date' compare equal."""
+    c = col.strip().lower()
+    c = c.split(" as ")[0].strip()
+    if "." in c:
+        c = c.split(".")[-1].strip()
+    return c
+
+
+_AGG_FUNCS = ("sum(", "count(", "avg(", "max(", "min(")
+
+
+def _enforce_group_by_select_integrity(select_cols: List[str], group_by: List[str]) -> List[str]:
+    """GENERAL FIX (Bug 5 hardening): whenever a query has GROUP BY, every
+    SELECT expression must be either (a) one of the group_by columns, or
+    (b) wrapped in an aggregate function (SUM/COUNT/AVG/MAX/MIN).
+
+    This used to only be enforced for queries we heuristically detected as
+    "budget joins" (`is_budget_query`). That's fragile: ANY grouped query
+    with a stray raw column (date, description, amount, ...) hits the same
+    SQLite quirk — non-aggregated, non-grouped columns silently return an
+    arbitrary row's value per group instead of erroring, which is exactly
+    what produced the per-transaction garbage rows under 'GROUP BY category'
+    in the budget-comparison screenshot. This now runs for every grouped
+    query, independent of whether budgets are involved.
+    """
+    if not group_by or not select_cols:
+        return select_cols
+
+    group_by_normalized = {
+        _normalize_col_for_compare(g) for g in group_by if isinstance(g, str)
+    }
+
+    kept = []
+    dropped = []
+    for col in select_cols:
+        if not isinstance(col, str):
+            kept.append(col)
+            continue
+        col_stripped = col.strip()
+        col_lower = col_stripped.lower()
+        if col_lower == "*":
+            # Handled separately by _sanitize_group_by
+            kept.append(col)
+            continue
+        if any(agg in col_lower for agg in _AGG_FUNCS):
+            kept.append(col)
+            continue
+        if _normalize_col_for_compare(col_stripped) in group_by_normalized:
+            kept.append(col)
+            continue
+        dropped.append(col)
+
+    if dropped:
+        print(f"[SQLSkeleton] Dropping non-aggregated, non-grouped columns from grouped SELECT: {dropped}")
+
+    if not kept:
+        kept = list(group_by)
+
+    # Ensure at least one aggregate remains so grouped "how much" questions
+    # still get an answer even if the plan forgot to include one.
+    if not any(any(agg in str(c).lower() for agg in _AGG_FUNCS) for c in kept):
+        kept.append("COUNT(*) AS row_count")
+
+    return kept
+
+
 def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any], 
                         intent: Dict[str, Any], dialect: str = "sqlite") -> str:
     tables = plan.get("tables", ["transactions"])
@@ -138,9 +205,20 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
 
     date_funcs = DATE_FUNCTIONS.get(dialect, DATE_FUNCTIONS["sqlite"])
 
-    # === CRITICAL FIX (Bug 5): Trim SELECT for budgets JOIN queries ===
     is_budget_query = any("budget" in str(t).lower() for t in tables) or \
                        any("budget" in str(j.get("right_table", "")).lower() for j in joins)
+
+    # === GENERAL FIX (Bug 5 hardening): enforce SELECT/GROUP BY integrity
+    # for grouped queries that AREN'T budget joins. Budget queries get the
+    # more surgical, budget-aware trim below instead — it already knows
+    # `budgets.allocated` / `budgets.spent` are safe to keep (they're
+    # functionally one-per-category once the join is date-aligned), whereas
+    # this general check can't tell those apart from a stray raw column and
+    # would strip them too.
+    if group_by and not is_budget_query:
+        select_cols = _enforce_group_by_select_integrity(select_cols, group_by)
+
+    # === CRITICAL FIX (Bug 5): Trim SELECT for budgets JOIN queries ===
     if is_budget_query and group_by:
         detail_cols_to_drop = {
             "transactions.date", "transactions.description", "transactions.amount", "transactions.type",
@@ -183,13 +261,28 @@ def build_sql_from_plan(plan: Dict[str, Any], entity_links: Dict[str, Any],
     join_clauses = []
     if len(tables) > 1:
         for join in joins:
-            if join and join.get("type") and join.get("right_table"):
-                join_type = join["type"]
+            if join and join.get("right_table"):
+                # BUG FIX: the planner's own JSON schema allows "type": null
+                # (`"type": "LEFT JOIN" or "INNER JOIN" or null`). The old
+                # check `join.get("type") and ...` silently dropped the ENTIRE
+                # join whenever the LLM emitted null for type — no join, no
+                # error, just a missing table in the query. Default sensibly
+                # instead of dropping the join.
+                join_type = join.get("type") or "INNER JOIN"
                 right_table = join["right_table"]
-                on_condition = join.get("on_condition", "")
+                on_condition = join.get("on_condition", "") or ""
+
+                # BUG FIX: this used to be an exact `right_table.lower() ==
+                # "budgets"` match with no whitespace stripping. Any stray
+                # space or an alias (e.g. "budgets b") from the LLM made this
+                # comparison fail silently, so the month_year alignment clause
+                # was never appended — which is exactly what produced the
+                # unaligned `transactions.category = budgets.category` join
+                # (and the resulting row-multiplication) seen in production.
+                right_table_base = right_table.strip().lower().split(" as ")[0].split(" ")[0]
 
                 # Automatically append month_year alignment for budgets join
-                if right_table.lower() == "budgets" and "month_year" not in on_condition.lower():
+                if right_table_base == "budgets" and "month_year" not in on_condition.lower():
                     if dialect == "mysql":
                         align_clause = "DATE_FORMAT(budgets.month_year, '%Y-%m') = DATE_FORMAT(transactions.date, '%Y-%m')"
                     elif dialect == "postgresql":
