@@ -1,262 +1,392 @@
-"""Semantic cache for query results with embedding-based similarity search."""
-from typing import Optional, Dict, Any, List, Tuple
-import numpy as np
+"""SemanticCache: Redis-backed semantic cache with embedding-based similarity search.
+
+Storage layout in Redis (all keys use prefix "convoql:cache:"):
+  result:<question>   → JSON-serialised query result  (with TTL)
+  emb:<question>      → numpy float32 bytes           (same TTL)
+  index               → Redis SET of all cached question strings
+
+On lookup:
+  1. Exact key match  → O(1) Redis GET
+  2. Semantic match   → load all embeddings from Redis, cosine-similarity scan
+  3. Keyword fallback → Jaccard overlap (no Redis, no SBERT required)
+
+Falls back gracefully to an in-process dict when Redis is unavailable so the
+rest of the application is never broken.
+"""
+
+from __future__ import annotations
+
+import asyncio
 import json
 import time
-import asyncio
+from typing import Any, Dict, List, Optional, Tuple
 
-# Try to use sentence-transformers, fallback to keyword matching
+import numpy as np
+
+# ── Redis (async) ─────────────────────────────────────────────────────────────
+try:
+    import redis.asyncio as aioredis
+    HAS_REDIS = True
+except ImportError:
+    HAS_REDIS = False
+
+# ── SentenceTransformers ──────────────────────────────────────────────────────
 try:
     from sentence_transformers import SentenceTransformer
     HAS_SBERT = True
 except ImportError:
     HAS_SBERT = False
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SemanticCache
+# ─────────────────────────────────────────────────────────────────────────────
+
 class SemanticCache:
-    """Production-grade semantic cache with embedding-based similarity search.
+    """Redis-backed semantic cache with embedding-based similarity search.
 
     Features:
-    - Embedding-based similarity (not just exact string match)
-    - Configurable similarity threshold
-    - TTL-based expiration
+    - Redis for persistent result + embedding storage (survives restarts)
+    - SentenceTransformer (all-MiniLM-L6-v2) for semantic similarity
+    - Configurable cosine similarity threshold (default 0.92)
+    - TTL-based expiration enforced by Redis natively
+    - Graceful double fallback: Redis failure → in-process dict;
+      SBERT failure → Jaccard keyword overlap
     - Cache statistics tracking
-    - Graceful fallback to keyword matching if embeddings unavailable
     """
 
-    def __init__(self, similarity_threshold: float = 0.92, ttl_seconds: int = 3600):
-        self._cache: Dict[str, Dict[str, Any]] = {}  # question -> {data, embedding, timestamp, hit_count}
-        self._embeddings: Dict[str, np.ndarray] = {}  # question -> embedding vector
-        self.similarity_threshold = similarity_threshold
-        self.ttl_seconds = ttl_seconds
-        self.model = None
-        self.stats = {"hits": 0, "misses": 0, "exact_hits": 0, "semantic_hits": 0, "evictions": 0}
+    KEY_PREFIX  = "convoql:cache:"
+    INDEX_KEY   = "convoql:cache:index"   # Redis SET of cached question strings
+    MODEL_NAME  = "all-MiniLM-L6-v2"
 
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379",
+        similarity_threshold: float = 0.92,
+        ttl_seconds: int = 3600,
+    ) -> None:
+        self.redis_url            = redis_url
+        self.similarity_threshold = similarity_threshold
+        self.ttl_seconds          = ttl_seconds
+
+        # Redis client (set during _connect)
+        self._redis: Optional[Any] = None
+        self._redis_ok: bool = False
+
+        # In-process fallback store (used when Redis is down)
+        self._fallback_cache:      Dict[str, Dict[str, Any]] = {}
+        self._fallback_embeddings: Dict[str, np.ndarray]     = {}
+
+        # Embedding model
+        self._model: Optional[Any] = None
+
+        self.stats = {
+            "hits": 0, "misses": 0,
+            "exact_hits": 0, "semantic_hits": 0,
+            "redis_hits": 0, "fallback_hits": 0,
+            "evictions": 0,
+        }
+
+        self._load_model()
+
+    # ── Initialisation ────────────────────────────────────────────────────────
+
+    def _load_model(self) -> None:
         if HAS_SBERT:
             try:
-                self.model = SentenceTransformer('all-MiniLM-L6-v2')
-                print("[SemanticCache] Loaded sentence-transformers model")
-            except Exception as e:
-                print(f"[SemanticCache] Could not load model: {e}")
-                self.model = None
+                self._model = SentenceTransformer(self.MODEL_NAME)
+                print(f"[SemanticCache] Loaded embedding model '{self.MODEL_NAME}'")
+            except Exception as exc:
+                print(f"[SemanticCache] Model load failed, keyword fallback active: {exc}")
         else:
-            print("[SemanticCache] sentence-transformers not available, using keyword fallback")
+            print("[SemanticCache] sentence-transformers not installed, keyword fallback active")
 
-    def _compute_embedding(self, text: str) -> Optional[np.ndarray]:
-        """Compute embedding vector for a text. Synchronous/CPU-bound — call
-        via _compute_embedding_async from async code, never directly."""
-        if self.model is None:
+    async def _connect(self) -> bool:
+        """Attempt to connect to Redis. Returns True on success."""
+        if not HAS_REDIS:
+            print("[SemanticCache] redis package not installed — using in-process fallback")
+            return False
+        try:
+            self._redis = aioredis.from_url(
+                self.redis_url,
+                encoding="utf-8",
+                decode_responses=False,   # we handle raw bytes for embeddings
+                socket_connect_timeout=2,
+            )
+            await self._redis.ping()
+            self._redis_ok = True
+            print(f"[SemanticCache] Connected to Redis at {self.redis_url}")
+            return True
+        except Exception as exc:
+            print(f"[SemanticCache] Redis unavailable ({exc}) — using in-process fallback")
+            self._redis = None
+            self._redis_ok = False
+            return False
+
+    async def _ensure_connected(self) -> None:
+        """Lazy-connect on first use."""
+        if self._redis is None and not self._redis_ok:
+            await self._connect()
+
+    # ── Embedding helpers ─────────────────────────────────────────────────────
+
+    def _encode_sync(self, text: str) -> Optional[np.ndarray]:
+        if self._model is None:
             return None
         try:
-            return self.model.encode(text)
-        except Exception as e:
-            print(f"[SemanticCache] Embedding failed: {e}")
+            return self._model.encode(text, show_progress_bar=False)
+        except Exception as exc:
+            print(f"[SemanticCache] Encoding failed: {exc}")
             return None
 
-    async def _compute_embedding_async(self, text: str) -> Optional[np.ndarray]:
-        """Async wrapper around _compute_embedding.
-
-        BUG FIX: get()/set() are async (they're called from an async
-        LangGraph node pipeline serving concurrent requests), but this used
-        to call self.model.encode() directly and synchronously inline.
-        SentenceTransformer.encode() is CPU-bound and can take tens to
-        hundreds of milliseconds per call — running it un-awaited inside an
-        async function blocks the entire event loop for that duration,
-        stalling every other in-flight request on the server, not just this
-        one. Offloading it to a thread via asyncio.to_thread lets the event
-        loop keep serving other coroutines while the embedding computes.
-        """
-        if self.model is None:
+    async def _encode_async(self, text: str) -> Optional[np.ndarray]:
+        """Offload CPU-bound encoding to a thread to avoid blocking the event loop."""
+        if self._model is None:
             return None
-        return await asyncio.to_thread(self._compute_embedding, text)
+        return await asyncio.to_thread(self._encode_sync, text)
 
-    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
-        """Compute cosine similarity between two vectors."""
-        dot = np.dot(vec1, vec2)
-        norm1 = np.linalg.norm(vec1)
-        norm2 = np.linalg.norm(vec2)
-        if norm1 == 0 or norm2 == 0:
+    @staticmethod
+    def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+        n1, n2 = np.linalg.norm(a), np.linalg.norm(b)
+        if n1 == 0 or n2 == 0:
             return 0.0
-        return float(dot / (norm1 * norm2))
+        return float(np.dot(a, b) / (n1 * n2))
 
-    def _is_expired(self, timestamp: float) -> bool:
-        """Check if a cached entry has expired."""
-        if self.ttl_seconds <= 0:
-            return False
-        return (time.time() - timestamp) > self.ttl_seconds
+    @staticmethod
+    def _emb_to_bytes(emb: np.ndarray) -> bytes:
+        return emb.astype(np.float32).tobytes()
 
-    def _cleanup_expired(self):
-        """Remove expired entries from cache."""
-        expired_keys = []
-        for key, entry in self._cache.items():
-            if self._is_expired(entry.get("timestamp", 0)):
-                expired_keys.append(key)
+    @staticmethod
+    def _bytes_to_emb(data: bytes) -> np.ndarray:
+        return np.frombuffer(data, dtype=np.float32)
 
-        for key in expired_keys:
-            del self._cache[key]
-            if key in self._embeddings:
-                del self._embeddings[key]
-            self.stats["evictions"] += 1
+    # ── Redis key helpers ─────────────────────────────────────────────────────
 
-        if expired_keys:
-            print(f"[SemanticCache] Cleaned up {len(expired_keys)} expired entries")
+    def _result_key(self, q: str) -> str:
+        return f"{self.KEY_PREFIX}result:{q}"
+
+    def _emb_key(self, q: str) -> str:
+        return f"{self.KEY_PREFIX}emb:{q}"
+
+    # ── Public API ────────────────────────────────────────────────────────────
 
     async def get(self, question: str) -> Optional[Dict[str, Any]]:
-        """Check if a similar question was asked before.
-
-        Returns cached result if:
-        1. Exact match found
-        2. Semantic similarity >= threshold (embedding-based)
-        3. Keyword overlap >= 80% (fallback if no embeddings)
-
-        Also checks TTL and cleans up expired entries.
-        """
+        """Return a cached result for *question* if one exists (exact or semantic match)."""
         question = question.lower().strip()
         if not question:
             return None
 
-        # Periodic cleanup (every 10 calls)
-        if (self.stats["hits"] + self.stats["misses"]) % 10 == 0:
-            self._cleanup_expired()
+        await self._ensure_connected()
 
-        # 1. Exact match check
-        if question in self._cache:
-            entry = self._cache[question]
-            if not self._is_expired(entry.get("timestamp", 0)):
-                entry["hit_count"] = entry.get("hit_count", 0) + 1
-                self.stats["hits"] += 1
-                self.stats["exact_hits"] += 1
-                print(f"[SemanticCache] EXACT HIT for: '{question[:50]}...'")
-                return entry["data"]
-            else:
-                # Expired exact match
-                del self._cache[question]
-                if question in self._embeddings:
-                    del self._embeddings[question]
-                self.stats["evictions"] += 1
+        if self._redis_ok:
+            result = await self._get_from_redis(question)
+        else:
+            result = await self._get_from_fallback(question)
 
-        # 2. Semantic similarity check (if embeddings available)
-        if self.model is not None:
-            query_vec = await self._compute_embedding_async(question)
-            if query_vec is not None:
-                best_match = None
-                best_score = 0.0
-                best_key = None
-
-                for cached_key, cached_vec in self._embeddings.items():
-                    if cached_key not in self._cache:  # Shouldn't happen, but safety check
-                        continue
-
-                    # Skip expired entries
-                    if self._is_expired(self._cache[cached_key].get("timestamp", 0)):
-                        continue
-
-                    similarity = self._cosine_similarity(query_vec, cached_vec)
-                    if similarity > best_score:
-                        best_score = similarity
-                        best_match = self._cache[cached_key]
-                        best_key = cached_key
-
-                if best_score >= self.similarity_threshold and best_match is not None:
-                    best_match["hit_count"] = best_match.get("hit_count", 0) + 1
-                    self.stats["hits"] += 1
-                    self.stats["semantic_hits"] += 1
-                    print(f"[SemanticCache] SEMANTIC HIT ({best_score:.3f}) for: '{question[:50]}...' -> matched '{best_key[:50]}...'")
-                    return best_match["data"]
-
-        # 3. Keyword fallback (if no embeddings or no semantic match)
-        best_keyword_match = None
-        best_keyword_score = 0.0
-        best_key = None
-
-        query_words = set(question.split())
-        for cached_key, entry in self._cache.items():
-            if self._is_expired(entry.get("timestamp", 0)):
-                continue
-
-            cached_words = set(cached_key.split())
-            if not cached_words:
-                continue
-
-            overlap = len(query_words & cached_words) / len(query_words | cached_words)
-            if overlap > best_keyword_score and overlap >= 0.8:  # 80% Jaccard similarity
-                best_keyword_score = overlap
-                best_keyword_match = entry
-                best_key = cached_key
-
-        if best_keyword_match is not None:
-            best_keyword_match["hit_count"] = best_keyword_match.get("hit_count", 0) + 1
+        if result is not None:
             self.stats["hits"] += 1
-            self.stats["semantic_hits"] += 1  # Count as semantic hit
-            print(f"[SemanticCache] KEYWORD HIT ({best_keyword_score:.2f}) for: '{question[:50]}...' -> matched '{best_key[:50]}...'")
-            return best_keyword_match["data"]
+        else:
+            self.stats["misses"] += 1
 
-        self.stats["misses"] += 1
-        print(f"[SemanticCache] MISS for: '{question[:50]}...'")
-        return None
+        return result
 
-    async def set(self, question: str, data: Dict[str, Any]):
-        """Cache a query result with embedding.
-
-        Stores:
-        - The result data
-        - Embedding vector (for future semantic matching)
-        - Timestamp (for TTL)
-        - Hit count (for cache analytics)
-        """
+    async def set(self, question: str, data: Dict[str, Any]) -> None:
+        """Store *data* under *question* in the cache."""
         question = question.lower().strip()
         if not question:
             return
 
-        # Compute embedding if model available
-        embedding = None
-        if self.model is not None:
-            embedding = await self._compute_embedding_async(question)
+        await self._ensure_connected()
+        embedding = await self._encode_async(question)
 
-        self._cache[question] = {
-            "data": data,
-            "timestamp": time.time(),
-            "hit_count": 0,
-        }
+        if self._redis_ok:
+            await self._set_in_redis(question, data, embedding)
+        else:
+            self._set_in_fallback(question, data, embedding)
 
-        if embedding is not None:
-            self._embeddings[question] = embedding
+        print(f"[SemanticCache] STORED '{question[:60]}' (redis={self._redis_ok})")
 
-        print(f"[SemanticCache] STORED: '{question[:50]}...' (embedding={embedding is not None})")
-
-    async def clear(self):
-        """Clear all cached entries."""
-        self._cache = {}
-        self._embeddings = {}
-        self.stats = {"hits": 0, "misses": 0, "exact_hits": 0, "semantic_hits": 0, "evictions": 0}
-        print("[SemanticCache] Cache cleared")
+    async def clear(self) -> None:
+        """Clear all cache entries."""
+        await self._ensure_connected()
+        if self._redis_ok:
+            try:
+                # Get all keys belonging to this cache and delete them
+                keys = await self._redis.smembers(self.INDEX_KEY)
+                pipe = self._redis.pipeline()
+                for q_bytes in keys:
+                    q = q_bytes.decode("utf-8") if isinstance(q_bytes, bytes) else q_bytes
+                    pipe.delete(self._result_key(q))
+                    pipe.delete(self._emb_key(q))
+                pipe.delete(self.INDEX_KEY)
+                await pipe.execute()
+                print("[SemanticCache] Redis cache cleared")
+            except Exception as exc:
+                print(f"[SemanticCache] Redis clear failed: {exc}")
+        self._fallback_cache.clear()
+        self._fallback_embeddings.clear()
+        self.stats = {k: 0 for k in self.stats}
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics."""
         total = self.stats["hits"] + self.stats["misses"]
-        hit_rate = self.stats["hits"] / total if total > 0 else 0.0
-
         return {
             **self.stats,
-            "hit_rate": round(hit_rate, 3),
+            "hit_rate": round(self.stats["hits"] / total, 3) if total else 0.0,
             "total_queries": total,
-            "cached_entries": len(self._cache),
-            "embedding_model_loaded": self.model is not None,
+            "redis_connected": self._redis_ok,
+            "embedding_model_loaded": self._model is not None,
             "similarity_threshold": self.similarity_threshold,
             "ttl_seconds": self.ttl_seconds,
         }
 
-    def get_cache_entries(self) -> List[Dict[str, Any]]:
-        """Get all cached entries with metadata (for debugging)."""
-        entries = []
-        for question, entry in self._cache.items():
-            entries.append({
-                "question": question,
-                "hit_count": entry.get("hit_count", 0),
-                "age_seconds": round(time.time() - entry.get("timestamp", 0), 1),
-                "is_expired": self._is_expired(entry.get("timestamp", 0)),
-            })
-        return entries
+    # ── Redis backend ─────────────────────────────────────────────────────────
 
-# Singleton instance
+    async def _get_from_redis(self, question: str) -> Optional[Dict[str, Any]]:
+        try:
+            # 1. Exact match — O(1)
+            raw = await self._redis.get(self._result_key(question))
+            if raw:
+                self.stats["exact_hits"] += 1
+                self.stats["redis_hits"]  += 1
+                print(f"[SemanticCache] REDIS EXACT HIT for '{question[:60]}'")
+                return json.loads(raw)
+
+            # 2. Semantic match
+            if self._model is not None:
+                match = await self._semantic_scan_redis(question)
+                if match is not None:
+                    self.stats["semantic_hits"] += 1
+                    self.stats["redis_hits"]     += 1
+                    return match
+
+            return None
+
+        except Exception as exc:
+            print(f"[SemanticCache] Redis GET error ({exc}) — falling back to in-process")
+            self._redis_ok = False
+            return await self._get_from_fallback(question)
+
+    async def _semantic_scan_redis(self, question: str) -> Optional[Dict[str, Any]]:
+        """Encode the question and scan all cached embeddings in Redis."""
+        try:
+            q_emb = await self._encode_async(question)
+            if q_emb is None:
+                return None
+
+            cached_questions_raw = await self._redis.smembers(self.INDEX_KEY)
+            if not cached_questions_raw:
+                return None
+
+            best_score  = 0.0
+            best_result = None
+
+            for q_bytes in cached_questions_raw:
+                cached_q = q_bytes.decode("utf-8") if isinstance(q_bytes, bytes) else q_bytes
+                emb_raw  = await self._redis.get(self._emb_key(cached_q))
+                if not emb_raw:
+                    continue  # TTL expired
+                c_emb = self._bytes_to_emb(emb_raw)
+                score = self._cosine(q_emb, c_emb)
+                if score > best_score:
+                    best_score  = score
+                    best_q      = cached_q
+
+            if best_score >= self.similarity_threshold:
+                raw = await self._redis.get(self._result_key(best_q))
+                if raw:
+                    print(
+                        f"[SemanticCache] REDIS SEMANTIC HIT "
+                        f"({best_score:.3f}) '{question[:50]}' → '{best_q[:50]}'"
+                    )
+                    return json.loads(raw)
+
+            return None
+
+        except Exception as exc:
+            print(f"[SemanticCache] Redis semantic scan error: {exc}")
+            return None
+
+    async def _set_in_redis(
+        self,
+        question: str,
+        data: Dict[str, Any],
+        embedding: Optional[np.ndarray],
+    ) -> None:
+        try:
+            pipe = self._redis.pipeline()
+            pipe.set(self._result_key(question), json.dumps(data), ex=self.ttl_seconds)
+            if embedding is not None:
+                pipe.set(self._emb_key(question), self._emb_to_bytes(embedding), ex=self.ttl_seconds)
+            pipe.sadd(self.INDEX_KEY, question)
+            await pipe.execute()
+        except Exception as exc:
+            print(f"[SemanticCache] Redis SET error ({exc}) — storing in fallback")
+            self._redis_ok = False
+            self._set_in_fallback(question, data, embedding)
+
+    # ── In-process fallback backend ───────────────────────────────────────────
+
+    async def _get_from_fallback(self, question: str) -> Optional[Dict[str, Any]]:
+        now = time.time()
+
+        # Exact match
+        entry = self._fallback_cache.get(question)
+        if entry and (now - entry["ts"]) < self.ttl_seconds:
+            self.stats["exact_hits"]   += 1
+            self.stats["fallback_hits"] += 1
+            print(f"[SemanticCache] FALLBACK EXACT HIT for '{question[:60]}'")
+            return entry["data"]
+
+        # Semantic scan
+        if self._model is not None:
+            q_emb = await self._encode_async(question)
+            if q_emb is not None:
+                best_score, best_key = 0.0, None
+                for k, emb in self._fallback_embeddings.items():
+                    e = self._fallback_cache.get(k)
+                    if not e or (now - e["ts"]) >= self.ttl_seconds:
+                        continue
+                    s = self._cosine(q_emb, emb)
+                    if s > best_score:
+                        best_score, best_key = s, k
+
+                if best_score >= self.similarity_threshold and best_key:
+                    self.stats["semantic_hits"]  += 1
+                    self.stats["fallback_hits"]  += 1
+                    print(
+                        f"[SemanticCache] FALLBACK SEMANTIC HIT "
+                        f"({best_score:.3f}) '{question[:50]}' → '{best_key[:50]}'"
+                    )
+                    return self._fallback_cache[best_key]["data"]
+
+        # Keyword fallback (Jaccard)
+        q_words = set(question.split())
+        best_score, best_key = 0.0, None
+        for k, entry in self._fallback_cache.items():
+            if (now - entry["ts"]) >= self.ttl_seconds:
+                continue
+            overlap = len(q_words & set(k.split())) / max(len(q_words | set(k.split())), 1)
+            if overlap > best_score and overlap >= 0.8:
+                best_score, best_key = overlap, k
+
+        if best_key:
+            self.stats["semantic_hits"]  += 1
+            self.stats["fallback_hits"]  += 1
+            print(f"[SemanticCache] FALLBACK KEYWORD HIT ({best_score:.2f})")
+            return self._fallback_cache[best_key]["data"]
+
+        return None
+
+    def _set_in_fallback(
+        self,
+        question: str,
+        data: Dict[str, Any],
+        embedding: Optional[np.ndarray],
+    ) -> None:
+        self._fallback_cache[question] = {"data": data, "ts": time.time()}
+        if embedding is not None:
+            self._fallback_embeddings[question] = embedding
+
+
+# ── Global singleton ──────────────────────────────────────────────────────────
 semantic_cache = SemanticCache()
-

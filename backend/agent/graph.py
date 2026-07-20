@@ -19,6 +19,7 @@ from agent.nodes.trend_analyzer import trend_analyzer_node
 from agent.nodes.narrative_generator import narrative_generator_node
 from db.connection import db_manager
 from cache.schema_rag import schema_rag
+from cache.semantic_cache import semantic_cache
 
 # Build graph
 workflow = StateGraph(AgentState)
@@ -210,7 +211,7 @@ agent_graph.ainvoke = ainvoke_with_limit
 
 
 async def initialize_graph():
-    """Initialize database and SchemaRAG. Must be called before first agent_graph use."""
+    """Initialize database, SchemaRAG, and SemanticCache. Must be called before first agent_graph use."""
     await db_manager.initialize()
     print(f"[Graph] Database initialized: {db_manager.dialect}")
 
@@ -218,4 +219,8 @@ async def initialize_graph():
     schema_rag.embed_schema(schema)
     stats = schema_rag.get_stats()
     print(f"[Graph] SchemaRAG indexed: {stats['tables_indexed']} tables, {stats['columns_indexed']} columns")
+
+    await semantic_cache._connect()
+    print(f"[Graph] SemanticCache ready (redis={semantic_cache._redis_ok})")
+
     return True

@@ -17,6 +17,7 @@ from sqlalchemy import text
 
 from agent.graph import agent_graph
 from db.connection import db_manager
+from cache.semantic_cache import semantic_cache
 
 router = APIRouter()
 
@@ -85,14 +86,21 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
     session_id = req.session_id or str(uuid.uuid4())
 
     try:
-        # Build initial state
+        # ── 1. Semantic cache check ──────────────────────────────────────────
+        cached = await semantic_cache.get(req.question)
+        if cached is not None:
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            print(f"[API] Cache HIT in {elapsed_ms}ms for: '{req.question[:50]}'")
+            cached["execution_time_ms"] = elapsed_ms
+            return QueryResponse(**cached)
+
+        # ── 2. Full LangGraph pipeline (cache miss) ──────────────────────────
         initial_state = {
             "question": req.question,
             "messages": [{"role": "user", "content": req.question}],
             "dialect": db_manager.dialect if db_manager.dialect else "sqlite",
         }
 
-        # Run the LangGraph
         final_state = await agent_graph.ainvoke(initial_state, config={"recursion_limit": 50})
 
         elapsed_ms = int((time.perf_counter() - start_time) * 1000)
@@ -123,7 +131,6 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
             chart_type=final_state.get("chart_type"),
             chart_title=final_state.get("chart_title"),
             insight=final_state.get("insight"),
-            # CRITICAL: Pass normalized result
             result=normalized_result,
             columns=normalized_result.get("columns") if normalized_result else None,
             rows=normalized_result.get("rows") if normalized_result else None,
@@ -135,11 +142,15 @@ async def query_endpoint(req: QueryRequest) -> QueryResponse:
             error=final_state.get("error"),
         )
 
+        # ── 3. Store in cache (only successful, non-error responses) ─────────
+        if not response.error:
+            await semantic_cache.set(req.question, response.model_dump())
+
         # Debug logging
         sql_preview = response.sql[:80] if response.sql else "None"
         print(f"[API] Query: {req.question[:50]}...")
         print(f"[API] SQL: {sql_preview}...")
-        print(f"[API] Rows: {response.row_count}, Has chart: {response.has_chart}")
+        print(f"[API] Rows: {response.row_count}, Has chart: {response.has_chart}, Time: {elapsed_ms}ms")
 
         return response
 
