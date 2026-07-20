@@ -17,3 +17,12 @@ __pycache__/
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Spider / evaluation artefacts (large datasets, not part of core product)
+backend/spider_data/
+backend/results.json
+backend/finance.db
+
+# ChromaDB persisted store (in-memory is used at runtime; no need to commit)
+chroma_db/
+backend/chroma_db/
