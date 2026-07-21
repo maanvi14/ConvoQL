@@ -42,7 +42,7 @@ Powered by LangGraph, LangChain, Groq LLaMA 3, and FastAPI, the system employs s
 🔗 Frontend: https://convo-ql.vercel.app/ | 🔗 Backend: https://huggingface.co/spaces/Maanviiii/ConvoQL-backend
 ---
 <img width="1023" height="1537" alt="image" src="https://github.com/user-attachments/assets/36ae5e49-9d4f-4fc2-a866-b373bc5aa827" />
-## SEMANTIC CACHE
+
 <img width="582" height="457" alt="image" src="https://github.com/user-attachments/assets/f2671c62-f8f5-4a75-925a-e81d45204375" />
 
 
