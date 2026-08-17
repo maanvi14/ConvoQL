@@ -12,7 +12,4 @@ venv/
 .mypy_cache/
 node_modules/
 frontend/
-*.db
-*.sqlite
-*.sqlite3
-
+!backend/finance.db
