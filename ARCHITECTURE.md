@@ -517,7 +517,7 @@ Here is the flow of the query: **"Compare my budget vs actual spending for May 2
 
 ### Backend Files
 *   `backend/main.py`: The entry point for the FastAPI server. It configures CORS middleware, registers the `/api` router, and runs database initialization on startup.
-*   `backend/config.py`: Manages configuration using Pydantic settings. It loads values from `.env` and defines defaults, such as `LLM_MODEL = "llama-3.1-8b-instant"`.
+*   `backend/config.py`: Manages configuration using Pydantic settings. It loads values from `.env` and defines defaults, such as `LLM_MODEL = "qwen/qwen3.8-27b"`.
 *   `backend/models.py`: Defines Pydantic validation models for requests and responses.
 *   `backend/db/connection.py`: Manages database connections using SQLAlchemy. It detects dialects (SQLite, MySQL, PostgreSQL) and exposes schema retrieval functions.
 *   `backend/cache/schema_rag.py`: Indexes schemas and retrieves relevant tables based on query keywords.

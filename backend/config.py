@@ -4,7 +4,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
-    LLM_MODEL: str = "llama-3.1-8b-instant"
+    LLM_MODEL: str = "qwen/qwen3.8-27b"
     DATABASE_URL: str = "sqlite:///./finance.db"
     REDIS_URL: str = "redis://localhost:6379"
     CHROMA_PERSIST_DIR: str = "./chroma_db"
